@@ -6,7 +6,7 @@ A collection of [Claude Code](https://code.claude.com) Agent Skills. Each skill 
 
 | Skill | What it does |
 |---|---|
-| [personal-dev-skill](skills/personal-dev-skill) | End-to-end dev loop: investigate, plan, independent plan check, execute, smoke test, parallel test/QC/review, fix until clean, commit and push. Token-lean. |
+| [personal-dev-skill](skills/personal-dev-skill) | Carries coding tasks from request to pushed, verified code: root-cause investigation, size-based planning, independent plan check, parallel execution, real smoke tests, parallel test/QC/review, fix until clean, ship. Scales effort to task size to keep token use low. [How it works and benefits](skills/personal-dev-skill/README.md) |
 
 ## Install a skill
 

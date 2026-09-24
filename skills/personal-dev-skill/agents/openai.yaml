@@ -1,0 +1,6 @@
+interface:
+  display_name: "PersonalDevSkill"
+  short_description: "End-to-end dev loop: investigate, plan, build, verify, ship"
+  default_prompt: "Use $personal-dev-skill to carry these tasks end to end: "
+policy:
+  allow_implicit_invocation: true

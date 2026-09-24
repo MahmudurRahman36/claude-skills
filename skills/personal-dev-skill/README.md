@@ -1,6 +1,6 @@
 # personal-dev-skill
 
-A Claude Code skill that takes a coding task, or a whole list of tasks, from request to pushed and verified code without supervision, while keeping token use low.
+An Agent Skill for Claude Code and OpenAI Codex that takes a coding task, or a whole list of tasks, from request to pushed and verified code without supervision, while keeping token use low.
 
 ```text
 /personal-dev-skill <tasks, issue list, or path to a task file>
@@ -74,9 +74,11 @@ size | status | change file:line | evidence (command → result) | commit/tag
 ```text
 personal-dev-skill/
 ├── SKILL.md              # core loop; critical rules first so they survive context compaction
+├── agents/openai.yaml    # Codex UI metadata (display name, default prompt)
 └── references/
     ├── briefs.md         # templates for helper agents (judge, implementer, QC, reviewer)
     ├── plan-format.md    # plan layout, at most 15 lines per plan
+    ├── platforms.md      # Claude Code tool names -> Codex equivalents
     └── skill-map.md      # which skill to use for which job
 ```
 
@@ -84,8 +86,15 @@ personal-dev-skill/
 
 ```bash
 git clone https://github.com/MahmudurRahman36/claude-skills.git
+# Claude Code
 cp -r claude-skills/skills/personal-dev-skill ~/.claude/skills/
+# Codex
+cp -r claude-skills/skills/personal-dev-skill ~/.codex/skills/
 ```
+
+Or with the skills CLI: `npx skills add https://github.com/MahmudurRahman36/claude-skills --skill personal-dev-skill -g -a claude-code codex`.
+
+Invoke with `/personal-dev-skill` in Claude Code or `$personal-dev-skill` in Codex; both also pick it up from its description.
 
 ## Sources
 

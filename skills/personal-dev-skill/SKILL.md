@@ -1,19 +1,21 @@
 ---
 name: personal-dev-skill
-description: Runs the user's end-to-end development loop (PersonalDevSkill) on one task or a task list — investigate root cause, plan (competing plans only when a real design choice exists), independent plan check, execute (parallel only for independent work), runtime smoke test, parallel test/QC/review, fix-until-clean, then commit and push. Token-lean by design.
-when_to_use: Use when the user hands over coding work to carry end to end — a bug list, feature requests, "do these items", "fix and deploy", "build X and push", "PersonalDevSkill", or pastes several tasks at once — even if they don't list the steps.
-argument-hint: "[tasks, issue list, or path to a task file]"
+description: Runs the user's end-to-end development loop (PersonalDevSkill) on one task or a task list — investigate root cause, plan (competing plans only when a real design choice exists), independent plan check, execute (parallel only for independent work), runtime smoke test, parallel test/QC/review, fix-until-clean, then commit and push. Token-lean by design. Use when the user hands over coding work to carry end to end — a bug list, feature requests, "do these items", "fix and deploy", "build X and push", "PersonalDevSkill", or pastes several tasks at once — even if they don't list the steps.
+compatibility: Claude Code and OpenAI Codex (tool mapping in references/platforms.md). Needs git and a shell.
 ---
 
 # PersonalDevSkill
 
 Tasks: $ARGUMENTS
+<!-- In Claude Code the line above is replaced by the invocation arguments. In Codex (or if it still reads "$ARGUMENTS"), the tasks are the user's request. -->
 
-Repo state: !`git status -sb 2>/dev/null | head -5 || true`
+Start by running `git status -sb` to see repo state.
+
+Works in **Claude Code** and **Codex**. Tool names below are Claude Code's; in Codex use the equivalents in [platforms.md](references/platforms.md).
 
 ## Non-negotiables (read first; survive compaction)
 1. Chat output in caveman **ultra** (load `caveman` skill if not active). Code, commits, PR text: normal.
-2. Project rules win: read CLAUDE.md / memory / project context doc once at start. Their deploy, doc-update, read-only-host and secret rules override this skill.
+2. Project rules win: read CLAUDE.md / AGENTS.md / memory / project context doc once at start. Their deploy, doc-update, read-only-host and secret rules override this skill.
 3. **No claim without fresh evidence.** "Done/fixed/passing" requires a command run *this round* whose output you read. Words like "should", "probably", "seems" = not verified. A subagent's "success" is a claim until checked.
 4. **No fix without root cause.** Reproduce, locate, explain the mechanism, then change code.
 5. Tokens are the budget. Subagents cost ~4x chat and multi-agent ~15x — spawn one only when it buys isolation, parallelism, or an independent opinion. Every subagent gets the brief template in [briefs.md](references/briefs.md) and returns ≤15 lines.
@@ -24,7 +26,7 @@ Repo state: !`git status -sb 2>/dev/null | head -5 || true`
 - **M** — several files, one obvious approach: one written plan, one reviewer.
 - **L** — design choice, cross-module, risky data/infra: 2–3 competing plans + independent judge + full verify.
 
-## Checklist (copy into TodoWrite/reply and tick as you go)
+## Checklist (copy into TodoWrite / Codex `update_plan` / reply and tick as you go)
 ```
 - [ ] 1 Context: project rules loaded, tasks sized S/M/L, dependencies between tasks noted
 - [ ] 2 Investigate: root cause / change surface found, with file:line evidence

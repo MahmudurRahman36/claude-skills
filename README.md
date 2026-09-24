@@ -1,6 +1,6 @@
 # Claude Skills
 
-A collection of [Claude Code](https://code.claude.com) Agent Skills. Each skill lives in its own folder under `skills/`.
+A collection of Agent Skills for [Claude Code](https://code.claude.com) and OpenAI Codex. Each skill lives in its own folder under `skills/`.
 
 ## Skills
 

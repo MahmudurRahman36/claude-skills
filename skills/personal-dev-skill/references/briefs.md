@@ -1,41 +1,21 @@
-# Subagent briefs
+# Delegation and review
 
-Every delegation states objective, inputs, boundaries, output format. Pass paths, not file contents. Name the model explicitly.
+Delegate only when enabled, authorized and useful. Keep small fixes inline.
+Pass the minimum relevant context, exact acceptance gates and accessible paths; include content only when a worker cannot access those paths.
+Do not send every skill or the full conversation to every worker.
 
-## Template
-```
-Objective: <one sentence>
-Context: <finding / plan excerpt, ≤10 lines>; files: <paths>
-Boundaries: <read-only | may edit only X>; do not <push, touch Y, refactor unrelated code>
-Done when: <verifiable condition + command to run>
-Return (≤15 lines): verdict first; then file:line evidence; then commands run with result. No prose summary of what you read.
-```
-
-## Plan judge (step 4)
-```
-Objective: pick the best plan for <task>. You did not write these; be adversarial.
-Context: finding + plans A/B/C below.
-Return: chosen plan (or merge), top 3 defects with evidence from the code, missing verification. ≤15 lines.
+```text
+Objective:
+Inputs: requirements/gates, facts, paths, base revision, relevant diff
+Scope: allowed edits, exclusions, dependency order, no extra publication
+Acceptance and verification:
+Return: findings/changes, evidence and exit codes, limitations; aim for 15 lines
 ```
 
-## Implementer (step 6)
-```
-Objective: implement plan tasks <n..m> exactly; nothing beyond them.
-Boundaries: edit only <paths>; match surrounding style; no new deps without saying so.
-Done when: <test command> passes and you have read its output.
-Return: files changed, commands run + exit codes, anything you could not do.
-```
+Parallel workers need independent tasks and disjoint edit ownership, preferably isolated worktrees. One integrator owns merge/conflict handling and integration tests. Never share mutable database fixtures or release environments without coordination.
 
-## Spec QC (step 8)
-```
-Objective: check the change against requirements, not code style.
-Context: requirements list; diff: `git diff <base>...HEAD`.
-Return: per requirement PASS/FAIL + evidence (command output or file:line).
-```
-
-## Code reviewer (step 8)
-```
-Objective: find correctness bugs, regressions, requirement gaps in `git diff <base>...HEAD`.
-Boundaries: report only issues with a concrete failure scenario; no style nits.
-Return: ranked findings: file:line, scenario → wrong result, suggested fix.
-```
+Plan review: check missing requirements, assumptions, design alternatives when real, rollback and test coverage.
+Code review: inspect working changes as well as committed changes against the chosen base; give concrete failure scenario and file/line.
+Requirements QC: PASS/FAIL/BLOCKED per gate, with evidence and environment.
+Runtime review: exercise the actual artifact; do not substitute a worker's assertion for logs or observed behavior.
+Keep review findings concise without suppressing material defects. Do not pass the desired verdict into an independent evaluation.

@@ -1,6 +1,6 @@
 interface:
   display_name: "PersonalDevSkill"
-  short_description: "End-to-end dev loop: investigate, plan, build, verify, ship"
-  default_prompt: "Use $personal-dev-skill to carry these tasks end to end: "
+  short_description: "Low-context delivery from requirements to live tests"
+  default_prompt: "Use $personal-dev-skill to deliver this work through the requested endpoint with verified evidence."
 policy:
   allow_implicit_invocation: true

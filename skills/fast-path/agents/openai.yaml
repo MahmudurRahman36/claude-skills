@@ -1,0 +1,6 @@
+interface:
+  display_name: "Fast-Path"
+  short_description: "Fast, low-token DAG execution with verified shortcuts"
+  default_prompt: "Use $fast-path to finish this task fast with the fewest tokens, same result as the long path, verified."
+policy:
+  allow_implicit_invocation: true

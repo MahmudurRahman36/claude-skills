@@ -1,0 +1,5 @@
+# Package boundary: `git archive` leaves these paths out, and scripts/validate.py reads the same attributes.
+dev/ export-ignore
+tests/selftest-*.md export-ignore
+tests/evidence-*.md export-ignore
+evals/results/ export-ignore

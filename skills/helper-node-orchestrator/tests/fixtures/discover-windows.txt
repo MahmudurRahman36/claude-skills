@@ -1,0 +1,17 @@
+orch_probe=1
+uname=windows
+arch=AMD64
+user=builder
+psi=0
+cpus=16
+mem_bytes=34252779520
+disk_free_bytes=512110190592
+docker_cli=1
+docker_socket=default
+docker_info={"ID":"c7d2a9e4-3b6f-4e21-9d0a-6f5e4c3b2a19","Containers":4,"DockerRootDir":"/var/lib/docker","CgroupDriver":"cgroupfs","CgroupVersion":"2","OSType":"linux","Architecture":"x86_64","NCPU":12,"MemTotal":16656302080,"Name":"docker-desktop","OperatingSystem":"Docker Desktop","ServerVersion":"27.3.1","SecurityOptions":["name=seccomp,profile=unconfined","name=cgroupns"]}
+buildx=1
+ctrj={"Command":"\"docker-entrypoint.s...\"","ID":"3f2a1b4c5d6e","Image":"app1:1","Labels":"com.docker.compose.project=app1,com.docker.compose.service=web","Names":"app1-web","Ports":"0.0.0.0:8080->80/tcp","State":"running","Status":"Up 2 days"}
+ctrj={"Command":"\"sleep 3600\"","ID":"9c8b7a6f5e4d","Image":"alpine:3.20","Labels":"io.orch.agent=1,io.orch.job=t-sleep","Names":"agentx-t-sleep-1","Ports":"","State":"running","Status":"Up 1 minute"}
+ctrj={"Command":"\"redis-server\"","ID":"1d2e3f4a5b6c","Image":"redis:7","Labels":"","Names":"cache","Ports":"127.0.0.1:6379->6379/tcp","State":"running","Status":"Up 5 hours"}
+ctrj={"Command":"\"/entrypoint\"","ID":"7a6b5c4d3e2f","Image":"buildkit:0.16","Labels":"io.orch.agent=1","Names":"builder-x","Ports":"","State":"running","Status":"Up 3 hours"}
+ep=8080 http 200 0.006001 app1-web

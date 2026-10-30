@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "generated": "2026-10-30T09:00:00",
+  "namespace": {"label": "io.orch.agent", "prefix": "agentx-"},
+  "hosts": [
+    {"name": "ha", "roles": ["helper"], "spec": "haa", "hostname": "192.0.2.11", "port": 22, "user": "deploy",
+     "ips": ["192.0.2.11"], "aliases": ["haa"], "contexts": ["orch-ha"]},
+    {"name": "hb", "roles": ["helper", "prod"], "spec": "hbx", "hostname": "192.0.2.12", "port": 2222,
+     "user": "deploy", "ips": ["192.0.2.12"], "aliases": ["hbx"], "contexts": ["orch-hb"]},
+    {"name": "pc", "roles": ["prod"], "spec": "deploy@192.0.2.20", "hostname": "192.0.2.20", "port": 22,
+     "user": "deploy", "ips": ["192.0.2.20"], "aliases": [], "contexts": []}
+  ],
+  "projects": [
+    {"root": "C:/work/shop", "store": "C:/work/shop/.git/orch",
+     "deploy": ["./scripts/deploy.sh"], "rollback": ["ssh hbx /srv/shop/rollback.sh"],
+     "jobs": {"dotnet test": "api-test", "dotnet build": "api-build", "npm test": "web-test",
+              "npm run build": "web-build", "npm run lint": "web-lint", "docker build": "shop-image"}},
+    {"root": "C:/work/lab", "store": "C:/work/lab/.git/orch", "deploy": [], "rollback": [],
+     "jobs": {"pytest": "py-test", "python -m pytest": "py-test", "python -m unittest": "py-unit", "ruff": "py-lint",
+              "npx jest": "js-test", "npm run typecheck": "web-types"}}
+  ]
+}

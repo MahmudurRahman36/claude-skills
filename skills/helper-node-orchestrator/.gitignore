@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# eval stub output (evals/README.md): the call log and the scenario state file
+evals/stub/calls.log
+evals/stub/state

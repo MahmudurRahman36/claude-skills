@@ -1,0 +1,4 @@
+interface:
+  display_name: "Helper-Node Orchestrator"
+  short_description: "Run builds and tests on helper servers, not this PC"
+  default_prompt: "Use $helper-node-orchestrator to run this build or test suite on a safe helper server."

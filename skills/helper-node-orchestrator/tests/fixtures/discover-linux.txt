@@ -1,0 +1,21 @@
+orch_probe=1
+uname=Linux
+arch=x86_64
+user=deploy
+cpus=8
+mem_kb=16113548
+psi=1
+cgroupfs=2
+docker_cli=1
+docker_socket=default
+docker_info={"ID":"5b1f7c2e-9a41-4d0b-8c3e-2f6a1d9e7b40","Containers":7,"ContainersRunning":6,"Images":12,"Driver":"overlay2","DockerRootDir":"/var/lib/docker","CgroupDriver":"systemd","CgroupVersion":"2","KernelVersion":"6.8.0-45-generic","OperatingSystem":"Ubuntu 24.04.1 LTS","OSType":"linux","Architecture":"x86_64","NCPU":8,"MemTotal":16500273152,"Name":"h11","ServerVersion":"27.3.1","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"],"ServerErrors":null,"ClientInfo":{"Version":"27.3.1","Context":"default"}}
+disk_free_kb=390625000
+buildx=1
+ctr=app1-web	app1:1	0.0.0.0:8080->80/tcp, :::8080->80/tcp
+ctr=app1-db	postgres:16	127.0.0.1:5432->5432/tcp
+ctr=shop-gw	nginx:1.27	0.0.0.0:8443->443/tcp, [::]:8443->443/tcp
+ctr=shop-api	shop-api:2	0.0.0.0:9000->9000/tcp
+ctr=metrics	exporter:1	0.0.0.0:9100-9101->9100-9101/tcp
+ctr=dns	coredns:1.11	0.0.0.0:53->53/udp
+ep=8080 http 200 0.004512 app1-web
+ep=8443 https 302 0.011803 shop-gw

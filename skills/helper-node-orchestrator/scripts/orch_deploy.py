@@ -518,6 +518,11 @@ def _g_reach(cfg, approved, probe) -> dict:
         return _gate(n, "skip", "not checked: the setup is not approved")
     if not hosts:
         return _gate(n, "skip", "not checked: no production host is saved")
+    saved = cfg.get("hosts") or {}
+    only = [(name, spec) for name, spec in hosts if (saved.get(name) or {}).get("reach") == "deploy-only"]
+    hosts = [hs for hs in hosts if hs not in only]
+    if not hosts:
+        return _gate(n, "warn", f"{_labels(only)}: reached only through the deploy command; not probed")
     try:
         recs = (probe or probe_production)(dict(hosts)) or {}
     except Exception as e:  # noqa: BLE001 - a bug in the probe must not hide the other gates
@@ -537,6 +542,9 @@ def _g_reach(cfg, approved, probe) -> dict:
                     pr.get("fix") or f"check that {spec} answers ssh, then retry: {tried}"))
     if bad:
         return _gate(n, "fail", "; ".join(b[0] for b in bad), bad[0][1])
+    if only:
+        return _gate(n, "warn", f"{_labels(hosts)} answered ssh; {_labels(only)}: reached only through the deploy "
+                                f"command; not probed")
     return _gate(n, "ok", f"{_labels(hosts)} answered ssh")
 
 
@@ -614,7 +622,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def health_targets(cfg) -> list:
-    """Saved health URLs -> [{"url", "insecure"}]; an entry is a URL string or {"url": ..., "insecure": true}."""
+    """Saved health URLs -> [{"url", "insecure"(, "resolve")}]; an entry is a URL string or {"url": ..., "insecure":
+    true, "resolve": "<IP>"}."""
     dep = (cfg or {}).get("deploy")
     if not isinstance(dep, dict) or dep.get("answer") == "later":
         return []
@@ -623,7 +632,8 @@ def health_targets(cfg) -> list:
         if isinstance(h, str) and h.strip():
             out.append({"url": h.strip(), "insecure": False})
         elif isinstance(h, dict) and isinstance(h.get("url"), str) and h["url"].strip():
-            out.append({"url": h["url"].strip(), "insecure": h.get("insecure") is True})
+            out.append({"url": h["url"].strip(), "insecure": h.get("insecure") is True,
+                        **({"resolve": h["resolve"]} if isinstance(h.get("resolve"), str) and h["resolve"] else {})})
     return out
 
 
@@ -677,10 +687,36 @@ def _get(url, timeout, opener) -> tuple:
         return None, _why(e, timeout)
 
 
-def check_url(url, insecure=False, timeout=None, tries=None, backoff=None, sleep=time.sleep) -> dict:
+def _resolving_handlers(ip, ctx) -> tuple:
+    """urllib handlers that connect to ip instead of the URL's host, which still goes out as SNI and Host (like
+    curl --resolve): for a health URL whose name does not resolve from this machine."""
+    ip = ip.strip("[]")
+
+    class Conn(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.create_connection((ip, self.port), self.timeout)
+
+    class TlsConn(http.client.HTTPSConnection):
+        def connect(self):
+            sock = socket.create_connection((ip, self.port), self.timeout)
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+    class Http(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(Conn, req)
+
+    class Https(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(TlsConn, req, context=ctx)
+
+    return Http(), Https(context=ctx)
+
+
+def check_url(url, insecure=False, timeout=None, tries=None, backoff=None, sleep=time.sleep, resolve=None) -> dict:
     """GET url until it answers 2xx/3xx: `tries` attempts of `timeout` s, pausing backoff[i] s between them (defaults
     LIVE_TIMEOUT, LIVE_TRIES, LIVE_BACKOFF) -> {"url" (credentials masked), "status", "ms" (the last try), "tries",
-    "error" (None = up), "insecure"}. Certificates are verified unless insecure is True."""
+    "error" (None = up), "insecure"(, "resolve")}. Certificates are verified unless insecure is True; resolve = an IP
+    to connect to instead of DNS (the URL's host is still sent as SNI and Host)."""
     timeout = LIVE_TIMEOUT if timeout is None else timeout
     tries = max(1, int(LIVE_TRIES if tries is None else tries))
     backoff = tuple(LIVE_BACKOFF if backoff is None else backoff) or (0,)
@@ -688,7 +724,10 @@ def check_url(url, insecure=False, timeout=None, tries=None, backoff=None, sleep
     if insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+    # resolve: straight to the IP, never through a proxy (a proxy tunnel would carry the proxy's name as SNI)
+    opener = urllib.request.build_opener(_NoRedirect, *((urllib.request.ProxyHandler({}),
+                                                         *_resolving_handlers(resolve, ctx)) if resolve
+                                                        else (urllib.request.HTTPSHandler(context=ctx),)))
     status, err, ms, n = None, None, 0, 0
     for n in range(1, tries + 1):
         if n > 1:
@@ -698,16 +737,17 @@ def check_url(url, insecure=False, timeout=None, tries=None, backoff=None, sleep
         ms = round((time.monotonic() - t0) * 1000)
         if err is None:
             break
-    return {"url": show_url(url), "status": status, "ms": ms, "tries": n, "error": err, "insecure": bool(insecure)}
+    return {"url": show_url(url), "status": status, "ms": ms, "tries": n, "error": err, "insecure": bool(insecure),
+            **({"resolve": resolve} if resolve else {})}
 
 
 def live(targets, timeout=None, tries=None, backoff=None, sleep=time.sleep) -> list:
-    """check_url for every {"url", "insecure"} target, in parallel; results in target order."""
+    """check_url for every {"url", "insecure"(, "resolve")} target, in parallel; results in target order."""
     if not targets:
         return []
     with cf.ThreadPoolExecutor(max_workers=min(8, len(targets))) as ex:
-        futs = [ex.submit(check_url, t["url"], t.get("insecure", False), timeout, tries, backoff, sleep)
-                for t in targets]
+        futs = [ex.submit(check_url, t["url"], t.get("insecure", False), timeout, tries, backoff, sleep,
+                          t.get("resolve")) for t in targets]
         return [f.result() for f in futs]
 
 
@@ -716,6 +756,8 @@ def live_line(c) -> str:
     line = f"{'ok' if c['error'] is None else 'FAIL':<4} {c['url']} {c['status'] or '-'} {c['ms'] / 1000:.2f}s"
     if c["tries"] > 1:
         line += f" ({c['tries']} tries)"
+    if c.get("resolve"):
+        line += f" (via {c['resolve']})"
     if c["insecure"]:
         line += " (certificate not checked)"
     return line + (f": {c['error']}" if c["error"] else "")

@@ -338,14 +338,14 @@ class SelftestProduction(unittest.TestCase):
                          [["cordon", "h11"], ["reconcile", "--node"], ["reconcile", "--node"]])
         self.assertTrue(popens)  # the kill and concurrency checks (t-hold) went to h11 only
         self.assertTrue(all("t-hold" in p and "h11" in p and "h12" not in p for p in popens), popens)
-        self.assertIn(f"[PASS] h12: t-ok: skipped: h12 {self.PROD}; selftest runs t-ok there only when you name it "
+        self.assertIn(f"[SKIP] h12: t-ok: skipped: h12 {self.PROD}; selftest runs t-ok there only when you name it "
                       f"with --node h12", out)
 
     def test_a_named_production_node_runs_t_ok_only(self):
         calls, popens, out = self.selftest(node=["h12"])
         self.assertEqual([c for c in calls if c[0] == "run"], [["run", "t-ok", "--node", "h12", "--wait", "0"]])
         self.assertEqual((popens, [c for c in calls if c[0] in ("cordon", "reconcile")]), ([], []))
-        self.assertIn(f"[PASS] failure-path jobs: skipped: h12 {self.PROD}; orch never runs t-fail", out)
+        self.assertIn(f"[SKIP] failure-path jobs: skipped: h12 {self.PROD}; orch never runs t-fail", out)
 
 
 class Argparse(unittest.TestCase):

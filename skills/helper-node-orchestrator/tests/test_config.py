@@ -241,6 +241,22 @@ class TestHashLoosening(unittest.TestCase):
         self.assertEqual(oc.loosening(*both), ["job e2e-suite (e2e) removed, so the deploy gate stops requiring it "
                                                "to pass"])
 
+    def test_source_allow_added_is_loosening(self):
+        # a path exempt from the outgoing secret scan ships to helpers unchecked: a new one needs approval
+        self._one(lambda o, n: n["jobs"]["api-test"].update(source_allow=["^src/tests/fake[.]py$"]),
+                  "job api-test: secret scan skips ^src/tests/fake[.]py$")
+        both = full_cfg(), full_cfg()
+        for c in both:
+            c["jobs"]["api-test"]["source_allow"] = ["^src/a[.]py$"]
+        self.assertEqual(oc.loosening(*both), [])
+        both[1]["jobs"]["api-test"]["source_allow"] = []
+        self.assertEqual(oc.loosening(*both), [])
+
+    def test_source_allow_reaches_the_engine_job(self):
+        j = {"image": "python:3.12-slim" + PIN, "cmd": "true", "source_allow": ["^src/a[.]py$"]}
+        self.assertEqual(oc._translate("x", j)["source_allow"], ["^src/a[.]py$"])
+        self.assertNotIn("source_allow", oc._translate("x", {**j, "source_allow": []}))
+
     def test_tightening_is_not_loosening(self):
         edits = [lambda n: n["hosts"]["h11"].update(roles=["helper", "prod"], jobs="tests"),
                  lambda n: n["hosts"]["h12"].update(jobs="readonly"),
@@ -403,6 +419,10 @@ class TestConfigIO(unittest.TestCase):
                  ({"schema": 1, "hosts": {"h11": {"ssh": "app1", "roles": []}}}, "roles must be"),
                  ({"schema": 1, "jobs": {"t-ok": {"cmd": "true"}}}, "built-in job"),
                  ({"schema": 1, "jobs": {"x": {"cmd": "true", "nope": 1}}}, "unknown key 'nope'"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["src/a.py"]}}}, "anchored path regexes"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^src/(a$"]}}}, "one exact file"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^.*$"]}}}, "one exact file"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^a$|^.*$"]}}}, "one exact file"),
                  ({"schema": 1, "deploy": {"command": "a\nb"}}, "deploy.command"),
                  ({"schema": 1, "deploy": {"health": ["ftp://x"]}}, "deploy.health"),
                  ({"schema": 1, "deploy": {"health": [{"url": "https://x.example/h", "insecure": "yes"}]}},

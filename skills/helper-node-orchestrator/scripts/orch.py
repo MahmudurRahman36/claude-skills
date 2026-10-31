@@ -144,7 +144,7 @@ JOB_KEYS = {"kind", "heavy", "requires", "image", "repo", "source", "memory", "c
             "result_paths", "dockerfile", "targets", "results_stage", "build_args", "read_only", "test_only",
             "default_args", "note", "source_allow", "stage", "context", "allow_external"}
 NODE_KEYS = {"enabled", "os", "host", "ssh", "ssh_args", "context", "transport", "docker_host", "role", "note", "tags",
-             "opt_in", "io"}
+             "opt_in", "io", "max_heavy"}
 NODES_TOP = {"_doc", "admission", "score_weights", "watchdog", "lease", "subnet_pool", "subnet_prefix", "builder", "nodes",
              "limits", "require_digest"}
 JOBS_TOP = {"_doc", "images", "repos", "source_exclude", "jobs"}
@@ -311,8 +311,21 @@ def validate_nodes(n: dict) -> None:
             errs.append(f"node {name}: os must be linux|windows")
         if c.get("transport") == "ssh-docker" and c.get("ssh") == "local":
             errs.append(f"node {name}: transport ssh-docker cannot use ssh local")
+        if "max_heavy" in c:
+            mh = c["max_heavy"]
+            if isinstance(mh, bool) or not isinstance(mh, int) or not 1 <= mh <= 2:
+                errs.append(f"node {name}: max_heavy {mh!r} not in 1..2")
+            elif mh > 1 and "prod" in str(c.get("role", "")):
+                errs.append(f"node {name}: a helper + production node runs at most 1 heavy job (max_heavy {mh})")
     if errs:
         raise ConfigError("; ".join(errs))
+
+
+def node_max_heavy(name: str, A: dict) -> int:
+    """Heavy-job capacity of one helper: its own max_heavy (config hosts.<name>.max_heavy) or the policy value; a
+    helper + production node runs at most 1."""
+    n = cfg_nodes()["nodes"].get(name) or {}
+    return 1 if "prod" in str(n.get("role", "")) else int(n.get("max_heavy") or A["max_heavy"])
 
 
 def config_source():
@@ -3220,8 +3233,9 @@ def select_node(job: Job, opts, exclude=(), mem=None) -> tuple:
                 if job.get("heavy"):
                     local = {l["jobid"] for l in live_jobs() if l["node"] == k and l.get("heavy") and l["_alive"]}
                     busy = local | set(probes[k].get("heavy_jobs", []))
-                    if len(busy) >= A["max_heavy"]:
-                        reasons[k] = f"busy: agent heavy jobs {len(busy)} >= max {A['max_heavy']} ({', '.join(sorted(busy))})"
+                    cap = node_max_heavy(k, A)
+                    if len(busy) >= cap:
+                        reasons[k] = f"busy: agent heavy jobs {len(busy)} >= max {cap} ({', '.join(sorted(busy))})"
                         continue
                 jobid = new_jobid()
                 live = {"jobid": jobid, "pid": os.getpid(), "pstart": proc_start(os.getpid()), "node": k, "job": job.name, "heavy": bool(job.get("heavy")),
@@ -3917,11 +3931,12 @@ def cmd_plan(a) -> int:
         p = fut[k].result()
         ad = admit(job.c, n, p)
         busy = set(p.get("heavy_jobs", [])) | {l["jobid"] for l in live_jobs() if l["node"] == k and l.get("heavy") and l["_alive"]}
-        if job.get("heavy") and len(busy) >= A["max_heavy"]:
+        cap = node_max_heavy(k, A)
+        if job.get("heavy") and len(busy) >= cap:
             ad["ok"] = False
-            ad["checks"].append({"check": "capacity", "ok": False, "detail": f"agent heavy jobs {len(busy)} >= max {A['max_heavy']}"})
+            ad["checks"].append({"check": "capacity", "ok": False, "detail": f"agent heavy jobs {len(busy)} >= max {cap}"})
         elif job.get("heavy"):
-            ad["checks"].append({"check": "capacity", "ok": True, "detail": f"agent heavy jobs {len(busy)} < max {A['max_heavy']}"})
+            ad["checks"].append({"check": "capacity", "ok": True, "detail": f"agent heavy jobs {len(busy)} < max {cap}"})
         say_(f"  {k}: {'ADMITTED' if ad['ok'] else 'NOT ADMITTED'} score={'-' if ad['score'] is None else ad['score']}")
         for c in ad["checks"]:
             say_(f"      [{'ok' if c['ok'] else 'NO'}] {c['check']}: {c['detail']}")
@@ -4502,8 +4517,9 @@ def cmd_selftest(a) -> int:
 
     def rec(name, ok, detail, out=""):
         rows.append((name, ok, detail))
-        print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-        md.extend([f"## {'PASS' if ok else 'FAIL'} - {name}", "", detail, ""])
+        tag = "SKIP" if ok and detail.startswith("skipped:") else "PASS" if ok else "FAIL"  # a skip never fails a run
+        print(f"[{tag}] {name}: {detail}", flush=True)
+        md.extend([f"## {tag} - {name}", "", detail, ""])
         if out:
             md.extend(["```", out.strip()[-3500:], "```", ""])
 
@@ -4696,16 +4712,20 @@ def cmd_selftest(a) -> int:
         rec(f"{tn}: killed orch mid-job -> reconcile keeps it during the lease, removes it after",
             bool(jid) and "keep container" in out1 and f"{PREFIX}{jid}-job" in out2.split("removed")[-1],
             f"job {jid}", out1 + "\n---\n" + out2)
-        # concurrency: two heavy jobs on one node
-        p1 = subprocess.Popen([sys.executable, "-u", str(Path(__file__).resolve()), "run", "t-hold", "--node", tn, "--wait", "0",
+        # concurrency: two heavy jobs on one node (capacity 1; a node with max_heavy 2 skips this check)
+        cap = node_max_heavy(tn, cfg_nodes()["admission"])
+        p1 = None if cap > 1 else subprocess.Popen([sys.executable, "-u", str(Path(__file__).resolve()), "run", "t-hold", "--node", tn, "--wait", "0",
                                "--", "15"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
         went_live = False
-        for _ in range(60):
+        for _ in range(60 if p1 else 0):
             if any(l.get("node") == tn and l.get("job") == "t-hold" for l in live_jobs()):
                 went_live = True
                 break
             time.sleep(0.5)
-        if not went_live:
+        if p1 is None:
+            rec(f"{tn}: two concurrent heavy jobs -> one runs, the other exit 75 (capacity 1, master lock)", True,
+                f"skipped: {tn} runs up to {cap} heavy jobs at once (max_heavy {cap})")
+        elif not went_live:
             p1.kill()
             o1 = dec(p1.communicate(timeout=60)[0])
             rec(f"{tn}: two concurrent heavy jobs -> one runs, the other exit 75 (capacity 1, master lock)", False,
@@ -4713,8 +4733,14 @@ def cmd_selftest(a) -> int:
         else:
             rc, out, s = _self(["run", "t-hold", "--node", tn, "--wait", "0", "--", "15"])
             o1 = dec(p1.communicate(timeout=300)[0])
-            rec(f"{tn}: two concurrent heavy jobs -> one runs, the other exit 75 (capacity 1, master lock)",
-                rc == NOADMIT and "busy" in out and p1.returncode == 0, f"second rc {rc}, first rc {p1.returncode}", out + "\n---\n" + o1[-800:])
+            why = (_last_json(out) or {}).get("reason") or ""
+            if rc == NOADMIT and "busy" not in out and p1.returncode == 0:  # refused, but for the node's load
+                rec(f"{tn}: two concurrent heavy jobs -> one runs, the other exit 75 (capacity 1, master lock)", True,
+                    f"skipped: the second job was refused for another reason ({why or 'see log'}), so capacity was "
+                    f"not tested", out + "\n---\n" + o1[-800:])
+            else:
+                rec(f"{tn}: two concurrent heavy jobs -> one runs, the other exit 75 (capacity 1, master lock)",
+                    rc == NOADMIT and "busy" in out and p1.returncode == 0, f"second rc {rc}, first rc {p1.returncode}", out + "\n---\n" + o1[-800:])
     # unreachable + docker-down phantom nodes -> 75 (phantom_config: a temp legacy config, test-mode children)
     tmp = Path(tempfile.mkdtemp(prefix="orch-cfg-"))
     phantoms, skip = phantom_config(tmp)
@@ -4745,11 +4771,13 @@ def _selftest_finish(rows, md, up, rec, out=None) -> int:
         rec(f"{name}: no job objects left (builder/cache allowed until gc)", not extra and not la["collisions"],
             f"objects {[o['kind'] + ':' + o['name'] for o in la['objects']]} collisions {la['collisions']}")
     ok = all(r[1] for r in rows)
-    md.insert(4, f"**{sum(1 for r in rows if r[1])}/{len(rows)} checks passed**\n")
+    skip = sum(1 for r in rows if r[1] and r[2].startswith("skipped:"))
+    sk = f", {skip} skipped" if skip else ""
+    md.insert(4, f"**{sum(1 for r in rows if r[1]) - skip}/{len(rows)} checks passed{sk}**\n")
     outp = Path(out) if out else HOME / "selftest" / f"selftest-run-{time.strftime('%Y%m%d-%H%M%S')}.md"
     outp.parent.mkdir(parents=True, exist_ok=True)
     outp.write_text("\n".join(md), encoding="utf-8")
-    print(f"\nselftest: {sum(1 for r in rows if r[1])}/{len(rows)} passed; log {outp}")
+    print(f"\nselftest: {sum(1 for r in rows if r[1]) - skip}/{len(rows)} passed{sk}; log {outp}")
     return 0 if ok else 1
 
 

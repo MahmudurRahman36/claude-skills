@@ -104,11 +104,16 @@ BUILTIN_JOBS = {
 }
 
 CONFIG_KEYS = ("schema", "hosts", "production", "deploy", "alerts", "jobs", "policy", "pending")
-HOST_KEYS = {"ssh", "roles", "jobs", "watch"}
+HOST_KEYS = {"ssh", "roles", "jobs", "watch", "max_heavy", "reach"}
+REACH = ("ssh", "deploy-only")  # deploy-only: a production server only the deploy command reaches; never probed
+# policy safety floors, the same the engine's validate_nodes enforces
+POLICY_FLOORS = (("admission", "reserve_frac", ">=", 0.2), ("admission", "max_heavy", "1..2", None),
+                 ("admission", "psi_some_avg10_max", "<=", 25), ("watchdog", "psi_max", "<=", 25))
 JOB_CFG_KEYS = {"stage", "kind", "image", "dir", "repo", "prep", "cmd", "cache", "env", "memory", "cpus", "pids",
                 "timeout", "prep_timeout", "fail_patterns", "result_paths", "dockerfile", "context", "detected",
-                "manifest", "files"}
+                "manifest", "files", "source_allow"}
 NAME_RX = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+SOURCE_ALLOW_RX = re.compile(r"\^(?:[A-Za-z0-9_/-]|\[\.\]|\\\.)+\$")  # one exact path: no wildcards or alternatives
 JOB_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 STATE_RX = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _USER_RX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
@@ -398,13 +403,28 @@ def health_url(e) -> str:
 
 
 def health_label(e) -> str:
-    return health_url(e) + (" (insecure)" if isinstance(e, dict) and e.get("insecure") else "")
+    return (health_url(e) + (f" (via {e['resolve']})" if isinstance(e, dict) and e.get("resolve") else "")
+            + (" (insecure)" if isinstance(e, dict) and e.get("insecure") else ""))
+
+
+def _ip_ok(v) -> bool:
+    try:
+        ipaddress.ip_address(str(v).strip("[]"))
+        return isinstance(v, str)
+    except ValueError:
+        return False
 
 
 def _health_ok(e) -> bool:
     if isinstance(e, dict):
-        return set(e) <= {"url", "insecure"} and _url_ok(e.get("url")) and isinstance(e.get("insecure", False), bool)
+        return (set(e) <= {"url", "insecure", "resolve"} and _url_ok(e.get("url"))
+                and isinstance(e.get("insecure", False), bool) and ("resolve" not in e or _ip_ok(e["resolve"])))
     return _url_ok(e)
+
+
+def health_resolve(e):
+    """The IP a health entry connects to instead of DNS (like curl --resolve), or None."""
+    return e.get("resolve") if isinstance(e, dict) else None
 
 
 def _one_line(v) -> bool:
@@ -463,6 +483,17 @@ def _check_config(cfg) -> list:
                 errs.append(f"host {n}: a production host never runs every job; use jobs tests, readonly or none")
         if "watch" in h and (not isinstance(h["watch"], list) or not all(_url_ok(u) for u in h["watch"])):
             errs.append(f"host {n}: watch must be a list of http(s) URLs")
+        if "max_heavy" in h:
+            mh = h["max_heavy"]
+            if isinstance(mh, bool) or not isinstance(mh, int) or not 1 <= mh <= 2:
+                errs.append(f"host {n}: max_heavy must be 1 or 2 (got {mh!r})")
+            elif isinstance(roles, list) and "prod" in roles and mh > 1:
+                errs.append(f"host {n}: a production host runs at most 1 heavy job; use max_heavy 1")
+        if "reach" in h:
+            if h["reach"] not in REACH:
+                errs.append(f"host {n}: reach must be one of {', '.join(REACH)} (got {h['reach']!r})")
+            elif h["reach"] == "deploy-only" and roles != ["prod"]:
+                errs.append(f"host {n}: reach deploy-only is only for a production-only server (a helper is reached by ssh)")
     prod = cfg.get("production")
     if prod is not None and (not isinstance(prod, dict) or prod.get("answer") not in ("set", "none", "later")):
         errs.append('production must be {"answer": "set" | "none" | "later"}')
@@ -496,6 +527,10 @@ def _check_config(cfg) -> list:
             errs.append(f"job {n}: must be an object")
             continue
         errs += [f"job {n}: unknown key {k!r}" for k in j if k not in JOB_CFG_KEYS]
+        sa = j.get("source_allow", [])
+        if not isinstance(sa, list) or not all(isinstance(p, str) and SOURCE_ALLOW_RX.fullmatch(p) for p in sa):
+            errs.append(f"job {n}: source_allow must be a list of anchored path regexes naming one exact file each "
+                        f"(letters, digits, / _ - and [.] or \\. for a dot), e.g. ^src/tests/x[.]py$")
         if j.get("kind", "container") not in ("container", "build"):
             errs.append(f"job {n}: kind must be container or build")
         if "stage" in j and j["stage"] not in STAGES:
@@ -505,7 +540,24 @@ def _check_config(cfg) -> list:
         errs.append("policy must be an object")
     else:
         errs += [f"policy: unknown key {k!r}" for k in pol if k not in DEFAULT_POLICY]
+        errs += [f"policy.{k}: unknown key {s!r}" for k in pol if isinstance(DEFAULT_POLICY.get(k), dict)
+                 and isinstance(pol[k], dict) for s in pol[k] if s not in DEFAULT_POLICY[k]]
         errs += _io_errors(pol.get("io"))
+        eff = _merge(DEFAULT_POLICY, pol)
+        for sec in {f[0] for f in POLICY_FLOORS} - {s for s in eff if isinstance(eff[s], dict)}:
+            errs.append(f"policy.{sec} must be an object")
+        for sec, key, op, lim in POLICY_FLOORS:
+            if not isinstance(eff.get(sec), dict):
+                continue
+            v = eff[sec].get(key)
+            if op == "1..2":
+                bad = isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 2
+            else:
+                bad = (isinstance(v, bool) or not isinstance(v, (int, float)) or v != v  # NaN passes < and >
+                       or (v < lim if op == ">=" else v > lim))
+            if bad:
+                errs.append(f"policy.{sec}.{key} {v!r} is past the safety floor ({op} {lim})" if lim is not None
+                            else f"policy.{sec}.{key} {v!r} not in 1..2")
     if not isinstance(cfg.get("pending", {}), dict):
         errs.append("pending must be an object")
     return errs
@@ -644,12 +696,28 @@ def _job_loosening(old, new) -> list:
                 out.append(f"job {n} ({was}) removed, so the deploy gate stops requiring it to pass")
             continue
         now = _run_stage(g)
+        added = [p for p in g.get("source_allow") or [] if p not in (j.get("source_allow") or [])]
+        if added:
+            out.append(f"job {n}: secret scan skips {', '.join(added)}")
         if was in req and now not in req:
             out.append(f"job {n}: stage {was} -> {now}, so the deploy gate stops requiring it to pass")
         a, b = _narrowest(was), _narrowest(now)
         if b and (a is None or SCOPE_RANK[b] < SCOPE_RANK[a]):
             out.append(f"job {n}: stage {was} -> {now}, so helpers limited to {SCOPE_WORDS[b]} now run it")
+    for n, g in nj.items():  # a new (or renamed) job ships its exempt paths unchecked too
+        if isinstance(g, dict) and not isinstance(oj.get(n), dict) and g.get("source_allow"):
+            out.append(f"job {n}: secret scan skips {', '.join(g['source_allow'])}")
     return out
+
+
+def _heavy_cap(h, cfg) -> int:
+    """Heavy jobs a host runs at once the way the engine counts them: 1 on a production host, else its own max_heavy
+    or the policy value."""
+    if "prod" in _roles(h):
+        return 1
+    v = h.get("max_heavy") or (_merge(DEFAULT_POLICY, (cfg or {}).get("policy") or {}).get("admission") or {}).get(
+        "max_heavy")
+    return v if isinstance(v, int) and not isinstance(v, bool) else 1
 
 
 def loosening(old: dict, new: dict) -> list:
@@ -672,6 +740,11 @@ def loosening(old: dict, new: dict) -> list:
         gone = [u for u in h.get("watch") or [] if u not in (g.get("watch") or [])]
         if gone:
             out.append(f"{_label(n, g)}: stops watching {', '.join(gone)}")
+        was, now = _heavy_cap(h, old), _heavy_cap(g, new)
+        if now > was:
+            out.append(f"{_label(n, g)}: runs up to {now} heavy jobs at once (was {was})")
+        if g.get("reach") == "deploy-only" and h.get("reach") != "deploy-only":
+            out.append(f"{_label(n, g)}: no longer probed over ssh (reached only through the deploy command)")
     for n, g in nh.items():
         if "helper" in _roles(g) and "helper" not in _roles(oh.get(n)):
             out.append(f"new helper {_label(n, g)} ({SCOPE_WORDS[_scope(g)]})")
@@ -948,6 +1021,8 @@ def summary_lines(cfg, state_hosts, full=False) -> list:
             line += f"; {_facts_text(rec.get('facts'))}"
             line += (f"; probed {rec.get('probed', '?')} " + ("ok" if rec.get("ok") else "with a problem")) if rec \
                 else "; not probed yet"
+            line += f"; up to {h['max_heavy']} heavy jobs at once" if h.get("max_heavy") else ""
+            line += "; reached only through the deploy command (not probed)" if h.get("reach") == "deploy-only" else ""
             out.append(line + (f"; watch {', '.join(h['watch'])}" if h.get("watch") else ""))
     else:
         hl = [f"{_label(n, h)} " + (SCOPE_WORDS[_scope(h)] if "jobs" in h else "jobs not chosen yet")
@@ -1340,6 +1415,8 @@ def _translate(name, j) -> dict:
             t["cache"] = dict(j["cache"])
     if j.get("detected"):
         t["note"] = j["detected"]
+    if j.get("source_allow"):
+        t["source_allow"] = list(j["source_allow"])  # exact paths exempt from the outgoing secret scan
     return t
 
 
@@ -1410,7 +1487,9 @@ def compile_engine(p, cfg, state_hosts, policy=None, master_prod=None) -> dict:
         nodes[n] = {"enabled": why is None, "os": facts["os"], "host": res.get("hostname") or parse_spec(h["ssh"])["host"],
                     "ssh": h["ssh"], "ssh_args": _ssh_args(h["ssh"]), "context": ctx, "transport": transport,
                     "docker_host": dh, "role": "helper+prod" if "prod" in roles or other else "helper",
-                    "tags": tags, "opt_in": opt,
+                    "tags": tags, "opt_in": opt,  # a production host (here or elsewhere) runs at most 1 heavy job
+                    **({"max_heavy": h["max_heavy"]} if h.get("max_heavy") and "prod" not in roles and not other
+                       else {}),
                     "io": copy.deepcopy(pol["io"]) if pol.get("io") and facts["os"] == "linux" else None,
                     "note": f"roles {' + '.join(roles)}; jobs {scope} ({SCOPE_WORDS[scope]})"
                             + (f"; production server in {', '.join(other)}" if other else "")

@@ -48,10 +48,11 @@ except Exception:  # noqa: BLE001 - a missing or broken journal never stops init
     orch_journal = None
 
 ANSWER_KEYS = ("helper_count", "helpers", "hosts", "production", "deploy", "alerts", "jobs", "jobs_remove",
-               "remove_hosts")
+               "remove_hosts", "policy")
 SETUP_KEYS = ("hosts", "production", "deploy", "alerts")  # the setup step's answer; {"setup": {...}} is unwrapped
-HOST_ANSWER_KEYS = ("roles", "jobs", "watch", "ssh")
-ORDER = ("remove_hosts", "helper_count", "helpers", "hosts", "production", "deploy", "alerts", "jobs", "jobs_remove")
+HOST_ANSWER_KEYS = ("roles", "jobs", "watch", "ssh", "max_heavy", "reach")
+ORDER = ("remove_hosts", "helper_count", "helpers", "hosts", "production", "deploy", "alerts", "jobs", "jobs_remove",
+         "policy")
 DEF_KEYS = ("stage", "kind", "image", "dir", "repo", "prep", "cmd", "cache", "env", "dockerfile", "context")
 MAX_HELPERS = 32
 LAST = {}  # the last cmd_init's state, step, applied, warnings, exit (+ error, answer_keys), for orch.py's journal
@@ -274,13 +275,15 @@ def _urls(v, what) -> list:
     for e in v:
         if isinstance(e, dict):  # {"url": ..., "insecure": true}: a self-signed internal certificate
             if not oc._health_ok(e) or what != "deploy.health":
-                raise InitError(f'{what}: {e!r} must be a URL string' + (' or {"url": "https://...", "insecure": true}'
+                raise InitError(f'{what}: {e!r} must be a URL string' + (' or {"url": "https://...", "insecure": true,'
+                                                                           ' "resolve": "<IP>"}'
                                                                            if what == "deploy.health" else ""))
             if _secret(e["url"]):
                 raise InitError(f"{what}: {e['url'].split('://')[0]}://... holds a credential (a password, a token or "
                                 f"a key); orch saves and prints these URLs, so use one without credentials")
             if e not in out:
-                out.append({"url": e["url"].strip(), "insecure": bool(e.get("insecure"))})
+                out.append({"url": e["url"].strip(), "insecure": bool(e.get("insecure")),
+                            **({"resolve": e["resolve"].strip("[]")} if e.get("resolve") else {})})
             continue
         u = e.strip()
         if not u:
@@ -533,6 +536,8 @@ def _probe_line(n, h, rec) -> str:
     if not rec.get("ok"):
         return f"{lab} problem: {(rec.get('problem') or {}).get('class') or 'other'} (see problems)"
     f = rec.get("facts") or {}
+    if rec.get("deploy_only"):
+        return f"{lab} ok: not probed (reached only through the deploy command)"
     if not f:
         return f"{lab} ok: reachable over ssh (production only; Docker not probed)"
     bits = [" ".join(str(x) for x in (f.get("os"), f.get("arch")) if x)]
@@ -586,12 +591,15 @@ def _probe(ctx, p, home, out, cfg, sh, names, before=None) -> dict:
     the record), used by no other project, is ever updated or removed. Updates sh; returns the new records."""
     hosts = cfg.get("hosts") or {}
     specs = {n: hosts[n]["ssh"] for n in names if n in hosts}
+    got = {}
+    for n in [n for n in specs if hosts[n].get("reach") == "deploy-only"]:  # only the deploy command reaches it
+        got[n] = sh[n] = {"name": n, "ok": True, "probed": None, "spec": specs.pop(n), "resolved": None, "facts": {},
+                          "problem": None, "deploy_only": True, "transport": None, "context": None, "docker_host": None}
     helpers = {n for n in specs if "helper" in oc._roles(hosts[n])}
     if not specs:
-        return {}
+        return got
     recs = ctx.od.probe_hosts(specs, helpers, run=ctx.run)
     master = ctx.od.master_facts(run=ctx.run) if helpers else {}
-    got = {}
     for n in specs:
         old = (sh.get(n) or {}).get("context") or (before or {}).get(n)
         rec = {**(recs.get(n) or {"ok": False, "spec": specs[n], "facts": {}, "resolved": None,
@@ -1070,9 +1078,19 @@ class _Apply:
                     h["watch"] = urls
                 else:
                     h.pop("watch", None)
+            for k in ("max_heavy", "reach"):  # checked by validate(); null removes
+                if k in d:
+                    if d[k] is None:
+                        h.pop(k, None)
+                    else:
+                        h[k] = d[k]
+                    if k == "reach":
+                        self.probe.add(n)
             words = oc._role_words(oc._roles(h))
             if "helper" in oc._roles(h) and "jobs" in h:
                 words += f", {oc.SCOPE_WORDS[h['jobs']]}"
+            words += f", up to {h['max_heavy']} heavy jobs at once" if h.get("max_heavy") else ""
+            words += ", reached only through the deploy command" if h.get("reach") == "deploy-only" else ""
             parts.append(f"{self.label(n)} {words}" + (f", watch {', '.join(h['watch'])}" if h.get("watch") else ""))
         return "; ".join(parts)
 
@@ -1173,6 +1191,29 @@ class _Apply:
                 self.out.warn(f"deploy.{k}: {first} does not exist in {Path(self.p.root).as_posix()} yet")
         self.cfg["deploy"] = d
         return (f"{d['command']} | health {', '.join(oc.health_label(h) for h in d['health']) or '-'} | rollback {d['rollback'] or '-'}")
+
+    def a_policy(self, v, ans):
+        """Overrides of the code defaults, merged into the saved ones (null removes a key); validate() checks the
+        keys and the safety floors, and a change needs --approve (loosening rule: "policy overrides changed")."""
+        if not isinstance(v, dict) or not v:
+            raise InitError('policy must be an object of overrides, e.g. {"admission": {"max_heavy": 2}}; '
+                            'null removes a key')
+        pol = copy.deepcopy(self.cfg.get("policy") or {})
+        for k, x in v.items():
+            if x is None:
+                pol.pop(k, None)
+            elif isinstance(x, dict) and isinstance(pol.get(k), dict):
+                pol[k] = {**pol[k], **x}
+                pol[k] = {s: y for s, y in pol[k].items() if y is not None}
+            elif isinstance(x, dict):
+                pol[k] = {s: y for s, y in x.items() if y is not None}
+            else:
+                pol[k] = x
+        if pol:
+            self.cfg["policy"] = pol
+        else:
+            self.cfg.pop("policy", None)
+        return json.dumps(pol, sort_keys=True) if pol else "defaults"
 
     def a_alerts(self, v, ans):
         if isinstance(v, dict) and set(v) <= {"command"}:

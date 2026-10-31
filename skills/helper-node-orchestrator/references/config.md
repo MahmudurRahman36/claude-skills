@@ -63,8 +63,10 @@ Everything here is written by orch. Read the setup with `orch init --show`; chan
 | `hosts.<name>.roles` | `helper`, `prod` or both |
 | `hosts.<name>.jobs` | helper scope: `all`, `tests`, `readonly` (only the built-in `shell-investigate`), `none`. Helper + production: `readonly` by default, at most `tests`. Missing = not answered yet |
 | `hosts.<name>.watch` | extra URLs on a shared helper whose latency the watchdog guards during jobs |
+| `hosts.<name>.max_heavy` | heavy jobs this helper runs at once, 1 or 2 (default: `policy.admission.max_heavy`); a production host runs at most 1; raising it needs approval |
+| `hosts.<name>.reach` | `ssh` (default) or `deploy-only`: a production-only server that only the deploy command reaches (a bridge, an API); orch never probes it, and the `production reachable` gate warns instead of failing |
 | `production.answer` | `set` (hosts with role `prod` listed), `none` or `later` |
-| `deploy` | `command` (runs on the master and must reach production itself), `rollback` (or null), `health` (URLs for `orch live`; an entry `{"url", "insecure": true}` skips the certificate check); or `{"answer": "later"}` |
+| `deploy` | `command` (runs on the master and must reach production itself), `rollback` (or null), `health` (URLs for `orch live`; an entry `{"url", "insecure": true}` skips the certificate check, `"resolve": "<IP>"` connects to that IP while the URL's host still goes out as SNI and Host, like `curl --resolve`); or `{"answer": "later"}` |
 | `alerts.command` | run detached on the master with the message on stdin and in `$MSG` when a helper's own apps degrade; null = no alert |
 | `jobs` | one entry per job (keys below); `{}` = the user chose no project jobs; missing = not answered yet |
 | `policy` | overrides of the code defaults (below); validated, and values past the safety floors are refused |

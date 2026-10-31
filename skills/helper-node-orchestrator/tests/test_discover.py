@@ -850,7 +850,7 @@ STUB_DOCKER = r"""#!/bin/sh
 H=
 if [ "$1" = -H ]; then H=$2; shift 2; fi
 echo "${H:-default} $1" >> "$FAKE_DIR/log"
-case $1 in ps|volume|network) echo "$*" >> "$FAKE_DIR/args" ;; esac
+case $1 in ps|volume|network) printf '%s\n' "$*" >> "$FAKE_DIR/args" ;; esac
 case $1 in
 ps) if [ "$2" = -a ]; then cat "$FAKE_DIR/psa.txt" 2>/dev/null; exit 0; fi; cat "$FAKE_DIR/ps.txt" ;;
 volume|network) cat "$FAKE_DIR/$1.txt" 2>/dev/null ;;

@@ -181,6 +181,9 @@ orch's protections run on the master. These server-side steps limit what a misus
 3. Restore the hook entries (guard, session start) from `settings.json.bak-helper-orch` if the registration changed.
 4. The v2 files are inert for v1 and can stay: the project stores (`.git/orch/`, journal included) and `$ORCH_HOME/registry.json`, `trust.json` and `guard-view.json`.
 
+## Changelog
+- **v2.1 (2026-10-31)**: `hosts.<name>.max_heavy` (1 or 2) lets a dedicated helper run two heavy jobs at once (refused on production hosts; raising it needs approval). `policy` is an `orch init --apply` answer key (safety floors enforced, every change needs approval). A health URL takes `"resolve": "<IP>"` (like `curl --resolve`) for names that do not resolve from the master. A production-only server reached only through the deploy command takes `"reach": "deploy-only"`: never probed, and the `production reachable` gate warns instead of failing. `orch selftest` skips the two-heavy-jobs capacity check (instead of failing it) when the second job is refused for the node's load or the node runs 2 heavy jobs; per-job `source_allow` exempts exact paths from the outgoing secret scan (one file per entry, `^src/tests/x[.]py$`; wildcards and alternatives are refused, and adding one, also on a new job, needs approval). A skipped selftest check prints `SKIP` and is not counted as passed. A helper that becomes production (here or in another project) runs 1 heavy job whatever its `max_heavy` or the policy says, and removing a host's `max_heavy` needs approval when the policy value is higher.
+
 ## Proven / not proven
 Evidence for this version from the development repo (the counts grow with every fix round):
 | area | evidence |

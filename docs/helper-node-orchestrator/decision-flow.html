@@ -1,0 +1,824 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Orch v2 Decision Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: the delivery loop (phases left to right, failure routes as arcs), then the machine lanes and
+   admission cards for the current phase, the phase inspector beside the journal feed and event log, then reference
+   panels (interview, states, store, exits, deploy gate, machines, journal, safety). Data mirrors v2.1.1 2026-10-31. */
+:root{
+  --bg:#f4f6fa; --surface:#ffffff; --surface2:#eef2f7; --fg:#0f172a; --muted:#56627a; --border:#d6dde8;
+  --accent:#16a34a; --run:#2563eb; --fail:#dc2626; --wait:#d97706; --info:#475569; --rail:#c9d2e0;
+  --m:#0d9488; --h58:#2563eb; --h50:#b45309; --h54:#7c3aed; --live:#dc2626;
+  --f-sans:"Fira Sans",system-ui,"Segoe UI",sans-serif; --f-mono:"Fira Code",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#020617; --surface:#0e1223; --surface2:#151a2e; --fg:#f8fafc; --muted:#94a3b8; --border:#283248;
+  --accent:#22c55e; --run:#60a5fa; --fail:#f87171; --wait:#fbbf24; --info:#94a3b8; --rail:#2a3550;
+  --m:#2dd4bf; --h58:#60a5fa; --h50:#fbbf24; --h54:#a78bfa; --live:#f87171; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#020617; --surface:#0e1223; --surface2:#151a2e; --fg:#f8fafc; --muted:#94a3b8; --border:#283248;
+  --accent:#22c55e; --run:#60a5fa; --fail:#f87171; --wait:#fbbf24; --info:#94a3b8; --rail:#2a3550;
+  --m:#2dd4bf; --h58:#60a5fa; --h50:#fbbf24; --h54:#a78bfa; --live:#f87171; color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-sans);margin:0;line-height:1.5;font-size:15px}
+.wrap{padding-block:20px 36px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));max-width:1400px;margin:0 auto;display:grid;gap:16px}
+.ico{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between}
+h1{font-size:1.75rem;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.lead{color:var(--muted);max-width:80ch;margin:4px 0 0}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:8px;min-height:40px;font:600 .9rem var(--f-sans);padding:0 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--fg);cursor:pointer}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#04110a}
+.btn:focus-visible,.story:focus-visible{outline:2px solid var(--run);outline-offset:2px}
+label.spd{display:inline-flex;gap:8px;align-items:center;color:var(--muted);font-size:.85rem}
+input[type=range]{accent-color:var(--accent);width:100px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;min-width:0}
+.ph{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)}
+.ph h2{font-size:.78rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0;display:flex;gap:8px;align-items:center}
+.badge{display:inline-flex;align-items:center;gap:6px;font:500 .78rem var(--f-mono);padding:3px 10px;border-radius:999px;border:1px solid var(--border);color:var(--muted);white-space:nowrap}
+.badge.wrap{white-space:normal}
+.badge.run{color:var(--run);border-color:var(--run)}.badge.fail{color:var(--fail);border-color:var(--fail)}.badge.ok{color:var(--accent);border-color:var(--accent)}.badge.wait{color:var(--wait);border-color:var(--wait)}
+.flowbox,.lanebox{overflow-x:auto}
+svg#flow,svg#lanes{display:block;width:100%;min-width:900px;height:auto}
+.stories{display:flex;flex-wrap:wrap;gap:6px;padding:12px 16px;border-top:1px solid var(--border)}
+.stories .grp{width:100%;font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+.story{display:inline-flex;align-items:center;gap:6px;min-height:34px;font:500 .84rem var(--f-sans);padding:0 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer}
+.story[aria-pressed="true"]{color:var(--fg);border-color:var(--run);background:var(--surface2)}
+.story .ico{width:15px;height:15px}
+.grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:16px}
+@media (max-width:980px){.grid{grid-template-columns:minmax(0,1fr)}}
+.phase-title{display:flex;gap:12px;align-items:center;padding:14px 16px 4px}
+.phase-title .pi{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:var(--surface2);color:var(--run)}
+.phase-title .pi .ico{width:22px;height:22px}
+.phase-title b{font-size:1.15rem;display:block}
+.phase-title span{color:var(--muted);font-size:.88rem}
+.reply{margin:8px 16px 0;padding:8px 12px;border-radius:10px;background:var(--surface2);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.reply span{font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.reply code{font:500 .82rem var(--f-mono);overflow-wrap:anywhere}
+.checks{list-style:none;margin:0;padding:8px 16px 16px;display:grid;gap:6px}
+.chk{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:10px;align-items:start;padding:9px 10px;border-radius:10px;border:1px solid transparent}
+.chk.cur{border-color:var(--run);background:var(--surface2)}
+.chk .st{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;border:1.5px solid var(--border);color:var(--muted)}
+.chk .st .ico{width:14px;height:14px}
+.chk.pass .st{border-color:var(--accent);color:var(--accent)}
+.chk.fail .st{border-color:var(--fail);color:var(--fail)}
+.chk.skip .st,.chk.retry .st{border-color:var(--wait);color:var(--wait)}
+.chk.run .st{border-color:var(--run);color:var(--run)}
+.chk.run .st .ico{animation:spin 1s linear infinite}
+.chk.pending{opacity:.5}
+@keyframes spin{to{transform:rotate(360deg)}}
+.chk .t{font-weight:600}
+.chk .w{display:block;font-size:.84rem;color:var(--muted)}
+.chk .c{display:block;font:400 .76rem var(--f-mono);color:var(--run);margin-top:2px;overflow-wrap:anywhere}
+.chk .f{display:block;font:400 .8rem var(--f-mono);color:var(--fg);margin-top:2px;overflow-wrap:anywhere}
+.chk.fail .f{color:var(--fail)}.chk.skip .f,.chk.retry .f{color:var(--wait)}
+.mchip{display:inline-flex;gap:6px;align-items:center;font:500 .74rem var(--f-mono);padding:3px 8px;border-radius:8px;border:1px solid var(--c);color:var(--c);white-space:nowrap}
+.mchip .ico{width:13px;height:13px}
+.log{font:400 .8rem/1.55 var(--f-mono);padding:12px 16px;height:520px;overflow:auto;display:grid;align-content:start;gap:2px}
+.log div{display:grid;grid-template-columns:52px 54px minmax(0,1fr);gap:8px}
+.log div>span:last-child{overflow-wrap:anywhere}
+.log .ts{color:var(--muted)}
+.log .k{font-weight:600}
+.k.pass{color:var(--accent)}.k.fail{color:var(--fail)}.k.skip,.k.wait,.k.retry{color:var(--wait)}.k.run{color:var(--run)}.k.info{color:var(--info)}.k.say{color:var(--m)}
+.sel{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;padding:0 16px 16px}
+@media (max-width:900px){.sel{grid-template-columns:minmax(0,1fr)}}
+.selnote{padding:0 16px 16px;color:var(--muted);font-size:.9rem;display:flex;gap:8px;align-items:flex-start}
+.selnote .ico{margin-top:3px}
+.sc{border:1.5px solid var(--border);border-radius:12px;padding:12px 14px;display:grid;gap:8px;min-width:0;align-content:start;transition:border-color .3s,background .3s}
+.sc.chosen{border-color:var(--accent);background:var(--surface2)}
+.sc.out{opacity:.78}
+.sc .hd{display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.sc .hd span:first-child{display:flex;gap:8px;align-items:center;font-weight:600}
+.sc .hd .ico{color:var(--c)}
+.gates{display:grid;grid-template-columns:auto 16px minmax(0,1fr);gap:3px 8px;font-size:.82rem;align-items:start}
+.gates .lb{color:var(--muted);white-space:nowrap}
+.gates .gi{width:14px;height:14px;margin-top:3px}
+.gates .pass{color:var(--accent)}.gates .fail{color:var(--fail)}.gates .na{color:var(--muted)}
+.gates .tx{font:400 .76rem/1.6 var(--f-mono);overflow-wrap:anywhere}
+.gates .tx.na{color:var(--muted)}
+.meter{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.sc .score{display:flex;justify-content:space-between;font-size:.82rem;color:var(--muted)}
+.sc .score b{font:500 .82rem var(--f-mono);color:var(--fg)}
+.sc .why{font-size:.82rem;color:var(--muted)}
+.lane-name{font:600 13px var(--f-sans);fill:var(--fg)}
+.lane-ip{font:400 10px var(--f-mono);fill:var(--muted)}
+.hoop-t{font:600 12px var(--f-sans);fill:var(--fg)}
+.bub-t{font:500 12px var(--f-sans);fill:var(--fg)}
+.tile-name{font:600 15px var(--f-sans);fill:var(--fg)}
+.tile-sub{font:400 11px var(--f-mono);fill:var(--muted)}
+.arc-label{font:500 11.5px var(--f-sans)}
+.edge-flow{stroke-dasharray:6 8;animation:flow 1.2s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-28}}
+@media (prefers-reduced-motion:reduce){.edge-flow,.chk.run .st .ico{animation:none}}
+/* reference panels */
+.tbl{overflow-x:auto;padding:8px 16px 16px}
+table{border-collapse:collapse;width:100%;min-width:680px;font-size:.88rem}
+th{text-align:left;font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:6px 10px;border-bottom:1px solid var(--border)}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+td code{font:500 .8rem var(--f-mono)}
+tr:last-child td{border-bottom:0}
+tr.hi td{background:var(--surface2)}
+tr.hi td:first-child{box-shadow:inset 3px 0 0 var(--run)}
+.ex{font:600 .9rem var(--f-mono)}
+.ex.pass{color:var(--accent)}.ex.fail{color:var(--fail)}.ex.wait{color:var(--wait)}
+.machines{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:16px}
+@media (max-width:1100px){.machines{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:640px){.machines{grid-template-columns:minmax(0,1fr)}}
+.mc{border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:grid;gap:6px;min-width:0;align-content:start}
+.mc .hd{display:flex;gap:10px;align-items:center}
+.mc .hd .ico{width:22px;height:22px;color:var(--c)}
+.mc b{font-size:1rem}
+.mc .ip{font:400 .74rem var(--f-mono);color:var(--muted)}
+.mc p{margin:0;font-size:.86rem;color:var(--muted)}
+.mc p strong{color:var(--fg);font-weight:600}
+.jobs{display:flex;flex-wrap:wrap;gap:4px}
+.jobs span{font:500 .72rem var(--f-mono);padding:2px 7px;border-radius:6px;background:var(--surface2);color:var(--fg)}
+.rules,.safety{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:0 16px 16px}
+.safety{padding-top:16px}
+@media (max-width:980px){.rules,.safety{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:520px){.rules,.safety{grid-template-columns:minmax(0,1fr)}}
+.rule{background:var(--surface2);border-radius:12px;padding:12px 14px}
+.rule b{display:flex;gap:8px;align-items:center;font-size:.95rem}
+.rule b .ico{color:var(--run)}
+.rule p{margin:4px 0 0;font-size:.84rem;color:var(--muted)}
+.rule code{font:500 .78rem var(--f-mono);color:var(--fg)}
+footer{color:var(--muted);font-size:.82rem;padding:0 4px}
+/* v2 additions: ask status, journal feed, stacked log column, setup step cards, gate table */
+.chk.ask .st{border-color:var(--wait);color:var(--wait)}
+.chk.ask .f{color:var(--wait)}
+.k.ask{color:var(--wait)}
+.side{display:grid;gap:16px;align-content:start;min-width:0}
+.log.short{height:250px}
+.jr{font:400 .8rem/1.5 var(--f-mono);padding:12px 16px;height:250px;overflow:auto;display:grid;align-content:start;gap:3px}
+.jr div{display:grid;grid-template-columns:34px 84px 48px minmax(0,1fr);gap:8px}
+.jr div>span:last-child{overflow-wrap:anywhere}
+.jr .n{color:var(--muted)}
+.jr .ty{font-weight:600}
+.jr .by{color:var(--muted)}
+.ty.start,.ty.end{color:var(--run)}.ty.decision{color:var(--m)}.ty.step{color:var(--info)}.ty.difficulty{color:var(--fail)}.ty.resolution{color:var(--accent)}
+.steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:16px}
+@media (max-width:1100px){.steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:600px){.steps{grid-template-columns:minmax(0,1fr)}}
+.stp{border:1px solid var(--border);border-radius:12px;padding:12px 14px;display:grid;gap:6px;align-content:start;min-width:0}
+.stp .no{font:600 .74rem var(--f-mono);color:var(--run);letter-spacing:.06em}
+.stp b{font-size:1rem}
+.stp p{margin:0;font-size:.84rem;color:var(--muted)}
+.stp code{font:500 .76rem var(--f-mono);color:var(--fg);overflow-wrap:anywhere}
+.stp .q{font-size:.84rem;color:var(--fg);background:var(--surface2);border-radius:8px;padding:6px 8px}
+.st-new{color:var(--muted)}.st-inc,.st-un{color:var(--wait)}.st-drift{color:var(--fail)}.st-ready{color:var(--accent)}
+.st-name{font:600 .88rem var(--f-mono)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0}
+@media (max-width:980px){.split{grid-template-columns:minmax(0,1fr)}}
+.split>div+div{border-left:1px solid var(--border)}
+@media (max-width:980px){.split>div+div{border-left:0;border-top:1px solid var(--border)}}
+.sub{font-size:.74rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:14px 16px 0;font-weight:600}
+.tree{font:400 .8rem/1.7 var(--f-mono);padding:8px 16px 16px;margin:0;white-space:pre;overflow-x:auto;color:var(--fg)}
+.tree i{font-style:normal;color:var(--muted)}
+</style>
+</head><body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-req" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></symbol>
+    <symbol id="i-inv" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-dev" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+    <symbol id="i-unit" viewBox="0 0 24 24"><path d="M14.5 2v17.5a2.5 2.5 0 0 1-5 0V2"/><path d="M8.5 2h7"/><path d="M14.5 16h-5"/></symbol>
+    <symbol id="i-reh" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+    <symbol id="i-dep" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.180 2.180 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></symbol>
+    <symbol id="i-post" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+    <symbol id="i-uat" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-done" viewBox="0 0 24 24"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></symbol>
+    <symbol id="i-rb" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.740L3 8"/><path d="M3 3v5h5"/></symbol>
+    <symbol id="i-halt" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-retry" viewBox="0 0 24 24"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+    <symbol id="i-mem" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/><path d="M8 6V3M12 6V3M16 6V3M8 21v-3M12 21v-3M16 21v-3"/></symbol>
+    <symbol id="i-unplug" viewBox="0 0 24 24"><path d="m19 5 3-3M2 22l3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4z"/><path d="M7.5 13.5 10 11M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0z"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.41 0l8.59-8.59a1 1 0 0 0 0-1.41z"/><path d="M7 7h.01"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
+    <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-setup" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h4a2 2 0 0 1 2 2v7"/></symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Orch v2.1.1 Decision Flow</h1>
+      <p class="lead">Nothing about your servers is built into the skill. The first time it runs in a project it asks how many helpers, how to reach each one, then production and deploy details, and saves the answers in the project. Every later session checks the saved setup and shows one line, or asks only for what is missing. Heavy work then goes through one <code>orch</code> command to the helper that is allowed, safe right now and has the most room, and every step lands in the project journal. Pick a story to watch it.</p>
+    </div>
+    <div class="ctl">
+      <button class="btn primary" id="bPlay" type="button"><svg class="ico"><use href="#i-pause"/></svg><span>Pause</span></button>
+      <button class="btn" id="bStep" type="button" aria-label="Next check"><svg class="ico"><use href="#i-next"/></svg>Step</button>
+      <label class="spd" for="spd">Speed <input id="spd" type="range" min="0.5" max="3" step="0.1" value="1.2"></label>
+    </div>
+  </header>
+
+  <section class="panel">
+    <div class="ph">
+      <h2><svg class="ico"><use href="#i-loop"/></svg>Delivery loop</h2>
+      <div class="ctl"><span class="badge" id="bdStory">story</span><span class="badge" id="bdIter">pass 1</span><span class="badge run" id="bdState">running</span></div>
+    </div>
+    <div class="flowbox"><svg id="flow" viewBox="0 0 1400 490" role="img" aria-label="Delivery loop with failure routes; the current phase and its checks are listed below"></svg></div>
+    <div class="stories" id="stories" role="group" aria-label="Story"></div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-server"/></svg>Server selection and micro steps</h2><span class="badge" id="bdLane">phase</span></div>
+    <div class="lanebox"><svg id="lanes" viewBox="0 0 1400 330" role="img" aria-label="Checks of the current phase placed on the machine that runs each one"></svg></div>
+    <div class="sel" id="sel"></div>
+    <div class="selnote" id="selnote" hidden></div>
+  </section>
+
+  <div class="grid">
+    <section class="panel" aria-live="polite">
+      <div class="ph"><h2><svg class="ico"><use href="#i-filter"/></svg>Inside this phase</h2><span class="badge" id="bdPhase">phase</span></div>
+      <div class="phase-title"><div class="pi"><svg class="ico" id="phIcon"><use href="#i-req"/></svg></div><div><b id="phName"></b><span id="phDesc"></span></div></div>
+      <div class="reply" id="reply" hidden><span>Agent reply</span><code id="replyT"></code></div>
+      <ol class="checks" id="checks"></ol>
+    </section>
+    <div class="side">
+      <section class="panel">
+        <div class="ph"><h2><svg class="ico"><use href="#i-book"/></svg>Project journal</h2><span class="badge" id="bdJr">0 records</span></div>
+        <div class="jr" id="jr" role="log" aria-label="Journal records written so far"></div>
+      </section>
+      <section class="panel">
+        <div class="ph"><h2><svg class="ico"><use href="#i-post"/></svg>Event log</h2><span class="badge" id="bdCount">0 events</span></div>
+        <div class="log short" id="log" role="log" aria-label="Event log"></div>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-setup"/></svg>First use: the setup interview</h2><span class="badge wrap">one step per turn · answers saved at once · resumes where it stopped</span></div>
+    <div class="steps">
+      <div class="stp"><span class="no">STEP 1 · COUNT</span><b>How many helpers?</b><div class="q">How many helper servers will orch use?</div><p>Options 1, 2, 3, 4+ (any number 1 to 32).</p><code>{"helper_count": 3}</code></div>
+      <div class="stp"><span class="no">STEP 2 · HELPERS</span><b>How to reach each one</b><div class="q">For each of the 3 helpers, what do you type after ssh?</div><p>Offers your <code>~/.ssh/config</code> aliases and helpers of other projects. orch probes them in parallel: ssh, Docker, CPU, memory, other containers.</p><code>{"helpers": ["app-builder", "deploy@192.0.2.12", "deploy@192.0.2.13"]}</code></div>
+      <div class="stp"><span class="no">STEP 3 · SETUP</span><b>One message for the rest</b><div class="q">Role and job scope per helper, production servers, deploy command, health URLs, rollback, alerts.</div><p>Defaults in [brackets]; “ok” accepts them. A shared helper never gets a silent “helper only”. “later” is an answer too.</p><code>{"production": ["deploy@192.0.2.20"], "deploy": {"command": "./deploy.sh"}}</code></div>
+      <div class="stp"><span class="no">STEP 4 · JOBS</span><b>Detected test jobs</b><div class="q">orch reads the project (dotnet, node, python, Dockerfile) and proposes jobs per stage.</div><p>You keep, drop or change them. Work that fits no job: the agent proposes one and saves it only on your yes.</p><code>lint · unit · build · image · e2e</code></div>
+      <div class="stp"><span class="no">STEP 5 · APPROVE</span><b>Save and use?</b><div class="q">One-line digest of the setup, then “Save and use this setup?”</div><p>The guard turns <code>orch init --approve</code> into a permission prompt: only you can say yes. Images are pinned to digests.</p><code>orch init --approve</code></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="split">
+      <div>
+        <div class="ph"><h2><svg class="ico"><use href="#i-flow"/></svg>Every later session: orch init says</h2></div>
+        <div class="tbl"><table style="min-width:520px">
+          <thead><tr><th>State</th><th>Means</th><th>What you see</th></tr></thead>
+          <tbody>
+            <tr><td class="st-name st-ready">ready</td><td>Saved, approved, every host probed clean</td><td>One summary line, no question</td></tr>
+            <tr><td class="st-name st-inc">incomplete</td><td>Some answers missing</td><td>Only the missing questions, in step order</td></tr>
+            <tr><td class="st-name st-un">unapproved</td><td>Never approved, or a change loosens protection</td><td>The digest and “Save and use?” again</td></tr>
+            <tr><td class="st-name st-drift">drift</td><td>A host or job changed underneath</td><td><code>host: what -&gt; fix</code> lines, then a wait</td></tr>
+            <tr><td class="st-name st-new">new</td><td>Nothing saved in this project</td><td>Step 1</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+      <div>
+        <div class="ph"><h2><svg class="ico"><use href="#i-box"/></svg>Where answers and memory live</h2></div>
+        <p class="sub">In the project (inside .git: never committed, shared by worktrees)</p>
+<pre class="tree">.git/orch/
+  config.json        <i>your answers: hosts, roles, scopes, deploy, jobs</i>
+  state/hosts.json   <i>what the last probe saw</i>
+  runs.jsonl         <i>every job: commit, node, result, time</i>
+  journal/
+    journal.jsonl    <i>one record per step, for tools</i>
+    MEMORY.md        <i>one readable section per task</i></pre>
+        <p class="sub">On the master, for every project</p>
+<pre class="tree">~/.helper-orch/
+  registry.json      <i>one name per machine (h11, h12, ...)</i>
+  trust.json         <i>what you approved, by hash</i>
+  guard-view.json    <i>what the guard enforces, from any folder</i></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-msg"/></svg>When an orch command ends</h2><span class="badge wrap">final stdout line = JSON · process exit = code</span></div>
+    <div class="tbl"><table>
+      <thead><tr><th>Exit</th><th>Result</th><th>What the agent does</th><th>Next phase</th></tr></thead>
+      <tbody id="exits">
+        <tr id="ex-0"><td class="ex pass">0</td><td>pass</td><td>Reports one line, continues</td><td>next in the loop</td></tr>
+        <tr id="ex-1"><td class="ex fail">1</td><td>test-fail</td><td><code>orch logs &lt;id&gt;</code> (brief), names up to 3 failures, fixes if edits are allowed</td><td>Development (e2e fail → Investigation)</td></tr>
+        <tr id="ex-2"><td class="ex fail">2</td><td>usage / refused</td><td>Fixes the call; setup missing or unapproved → back to <code>orch init</code>; a secret-scan hit is never bypassed</td><td>same phase</td></tr>
+        <tr id="ex-3"><td class="ex wait">3</td><td>oom</td><td>orch already retried once at 1.5× memory; the agent asks before raising the limit</td><td>Development</td></tr>
+        <tr id="ex-4"><td class="ex wait">4</td><td>timeout</td><td><code>orch logs &lt;id&gt;</code>, reports</td><td>Investigation</td></tr>
+        <tr id="ex-5"><td class="ex fail">5</td><td>infra</td><td>orch already retried on another helper; reports “Helper &lt;node&gt; failed: &lt;reason&gt;”</td><td>stop</td></tr>
+        <tr id="ex-6"><td class="ex fail">6</td><td>r1-guard</td><td>The helper's own apps degraded: job killed, helper paused. Never unpaused by the agent</td><td>stop</td></tr>
+        <tr id="ex-7"><td class="ex wait">7</td><td>gate</td><td>A deploy gate is not met: does the first failing gate's <code>fix</code></td><td>that fix</td></tr>
+        <tr id="ex-75"><td class="ex wait">75</td><td>not-admitted</td><td>No helper safe after a 10 min wait. Quotes the reason line exactly; no local fallback</td><td>stop</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-lock"/></svg>Deploy gate: orch deploy --check</h2><span class="badge wrap">orch never deploys · exit 0 = all met · exit 7 = first failing gate has the fix</span></div>
+    <div class="tbl"><table>
+      <thead><tr><th>Gate</th><th>Met when</th><th>Fix when not</th></tr></thead>
+      <tbody id="gatetbl">
+        <tr><td><code>setup approved</code></td><td>The saved setup is approved and unchanged since</td><td><code>orch init</code>, approve only after your yes</td></tr>
+        <tr><td><code>production answered</code></td><td>Production servers and a deploy command are saved (not “later”)</td><td>The agent relays the question (<code>orch init --ask production|deploy</code>)</td></tr>
+        <tr><td><code>tree clean</code></td><td>Nothing uncommitted or untracked</td><td>Commit or stash</td></tr>
+        <tr><td><code>HEAD pushed</code></td><td>The commit is on its upstream branch</td><td><code>git push</code></td></tr>
+        <tr><td><code>required jobs</code></td><td>Lint and unit passed on a helper for this exact commit (runs with <code>--wt</code> do not count)</td><td><code>orch ci --stages lint,unit</code></td></tr>
+        <tr><td><code>scripts unchanged</code></td><td>Deploy and rollback scripts match what you approved (a change only warns)</td><td>Review the change</td></tr>
+        <tr><td><code>production reachable</code></td><td>ssh reaches every production server (read-only). A server reached only by the deploy command (<code>reach: deploy-only</code>) is not probed, and the gate warns instead of failing</td><td>The reason line, for you</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-server"/></svg>Machines and how one is chosen</h2><span class="badge wrap">names, addresses and numbers are example answers</span></div>
+    <div class="machines" id="machines"></div>
+    <div class="rules">
+      <div class="rule"><b><svg class="ico"><use href="#i-shield"/></svg>1 · Heavy or light</b><p>Reading, editing, planning, git and the deploy command stay on the master. Builds, installs, tests, lint, suites and image builds go to a helper. Unsure counts as heavy.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-filter"/></svg>2 · Allowed there</b><p>Reachable, Docker up, not paused, and the job fits the helper's scope: everything / lint + tests (no image builds) / read-only commands / nothing. Only if you give a helper the production role too (not in this example) is it read-only unless you pick lint + tests.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-gauge"/></svg>3 · Safe right now</b><p>Free memory − job ≥ 25% of the helper. PSI avg10 &lt; 10, swap &lt; 50 pages/s, disk ≥ 15% and 20 GB free, inodes ≥ 10%, load1 &lt; 0.85 × CPUs. A missing memory or disk reading rejects.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-trophy"/></svg>4 · Best of the rest</b><p>Score = 0.5 × memory room + 0.3 × idle CPU + 0.2 × affinity. One heavy job per helper; a dedicated helper may run 2 (<code>max_heavy</code>, after your approval); a production server always 1. Nothing free: orch waits up to 10 min, then exit 75.</p></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-book"/></svg>What the journal holds</h2><span class="badge wrap">orch journal show · orch journal stats [--json]</span></div>
+    <div class="safety">
+      <div class="rule"><b><svg class="ico"><use href="#i-req"/></svg>start / end</b><p>The agent opens every task with summary, request and plan, and closes it with outcome (done, partial, failed, blocked), summary, lessons and what is still open. orch adds the duration.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-flow"/></svg>decision</b><p>What was decided, why, and the options. The agent records its own; orch records each setup answer you give.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-retry"/></svg>step</b><p>orch records every command by itself: verb, job, helper, admission, retries, result and seconds. The agent adds the deploy or rollback command it ran.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-x"/></svg>difficulty / resolution</b><p>orch records its own failures and marks them resolved when the same command later passes. The agent adds problems orch cannot see, and how each was fixed.</p></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-shield"/></svg>What keeps helpers and production safe</h2></div>
+    <div class="safety">
+      <div class="rule"><b><svg class="ico"><use href="#i-shield"/></svg>Guard hook</b><p>Every tool call on the master is checked first, MCP tools too. Heavy work on the master, or raw docker, ssh-docker or file copies toward a helper, is denied with <code>blocked: &lt;what&gt;; use: &lt;orch cmd&gt;</code>.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-globe"/></svg>Production read-only</b><p>Read-only commands toward production are allowed, destructive ones denied, anything else asks you. Changes go only through the saved deploy or rollback command.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-lock"/></svg>Your setup is yours</b><p>The agent cannot write orch's store, trust or guard files, set orch's variables, or approve: approval is your permission prompt. Loosening changes need a new approval.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-tag"/></svg>Own items only</b><p>orch touches only names that start with <code>agentx-</code> and carry the <code>io.orch.agent</code> label. Anything else on a helper is reported, never removed.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-key"/></svg>Secret scan</b><p>Source leaves the master as a git archive (<code>--wt</code> adds uncommitted files), scanned for keys and tokens first. A hit stops the job with exit 2. <code>source_allow</code> can exempt one exact file per entry (a test fixture), matched case-exact; adding one needs your approval. Setup answers holding a secret are refused.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-unplug"/></svg>No network in tests</b><p>Prep gets its own /28 network and a cache volume; the network is cut before tests start. Phase markers count only with the per-job nonce.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-pulse"/></svg>R1 watchdog</b><p>Every 10 s it checks the helper's own apps: container fingerprint, PSI &lt; 25, iowait &lt; 30%, watched URLs &lt; 2× + 0.2 s. Three bad checks kill the job and pause the helper for 30 min.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-msg"/></svg>Few tokens</b><p>Jobs run in the background, independent ones together. The agent reads only the final JSON line, brief logs on failure, and replies one line per job.</p></div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="ph"><h2><svg class="ico"><use href="#i-tag"/></svg>New in v2.1 and v2.1.1</h2><span class="badge wrap">every loosening asks for your approval first</span></div>
+    <div class="safety">
+      <div class="rule"><b><svg class="ico"><use href="#i-gauge"/></svg>Two heavy jobs</b><p><code>hosts.&lt;name&gt;.max_heavy</code> 1 or 2 lets a dedicated helper run two heavy jobs at once. A helper that is production here or in another project always runs 1.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-filter"/></svg>Policy answer</b><p><code>policy</code> overrides the defaults in <code>orch init --apply</code>. Safety floors hold (reserve &ge; 20%, PSI &le; 25, max_heavy 1..2); a non-object or NaN value is refused; every change needs approval.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-globe"/></svg>Health via IP</b><p>A health URL can take <code>"resolve": "&lt;IP&gt;"</code> like <code>curl --resolve</code>: orch connects to that IP, sends the name as SNI and Host, and never goes through a proxy.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-lock"/></svg>Deploy-only production</b><p><code>reach: deploy-only</code> marks a production server only the deploy command reaches. orch never probes it; the reachability gate warns instead of failing.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-key"/></svg>Exact-file exemptions</b><p><code>source_allow</code> entries name one file each: <code>^src/tests/fixtures/fake-key[.]pem$</code>. Wildcards, repeats, groups and alternatives are refused; matching is case-exact to the true end.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-shield"/></svg>Approval on loosening</b><p>Raising a helper's effective capacity, a new or renamed job with <code>source_allow</code>, deploy-only reach and policy changes all wait for your yes.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-pulse"/></svg>Honest selftest</b><p>A check that cannot run here prints <code>[SKIP]</code> and is not counted as passed, e.g. "Docker down" without a Linux helper.</p></div>
+      <div class="rule"><b><svg class="ico"><use href="#i-trophy"/></svg>Proven</b><p>781 unit tests, 69 guard tests over 882 fixtures, a real local Docker run and a real ssh run on a shared helper, plus two independent reviews.</p></div>
+    </div>
+  </section>
+
+  <footer>Mirrors helper-node-orchestrator v2.1.1 (2026-10-31), the finished release. Host names, addresses, jobs and numbers in the stories are example answers (documentation addresses 192.0.2.x); the skill itself holds none of them. Thresholds, exits and gates come from the skill's defaults.</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const NS="http://www.w3.org/2000/svg";
+// machines = example answers to the interview; the skill itself holds none of them
+const M={M:{n:"Master",ip:"this machine",c:"--m",i:"i-monitor",role:"Plans, edits code, owns git, runs the saved deploy command and read-only checks. Runs orch, never heavy work.",pick:"Light work and anything that changes production.",jobs:["init","journal","nodes","plan","deploy --check","live","gc"]},
+ h11:{n:"h11",ip:"app-builder → 192.0.2.11",c:"--h58",i:"i-server",role:"Answer: helper only, jobs everything. 8 CPU, 16 GB, no other containers.",pick:"Usually wins on memory room; the biggest helper.",jobs:["lint","unit","build","image","e2e","shell-investigate"]},
+ h12:{n:"h12",ip:"deploy@192.0.2.12",c:"--h54",i:"i-server",role:"Answer: helper only, jobs lint + tests. Shared: 2 other containers, so the default was read-only.",pick:"Picked for tests when it has more room than h11.",jobs:["lint","unit","build","e2e","shell-investigate"]},
+ h13:{n:"h13",ip:"deploy@192.0.2.13",c:"--h50",i:"i-server",role:"Answer: helper only, jobs everything. Smaller: 4 CPU, 8 GB, no other containers.",pick:"Takes jobs when the bigger helpers are busy or short of memory.",jobs:["lint","unit","build","image","e2e","shell-investigate"]},
+ P:{n:"h20",ip:"deploy@192.0.2.20 · production",c:"--live",i:"i-globe",role:"Answer: production only. Changed only by ./deploy.sh from the master; checked read-only.",pick:"Never runs agent jobs.",jobs:[]}};
+const C=(lane,t,w,f,o)=>Object.assign({lane,t,w,f,st:"pass"},o||{});
+const J=(ty,by,tx)=>[ty,by,tx];
+const P={
+ setup:{n:"Setup",i:"i-setup",x:70,on:"master",d:"Check the saved setup; ask only what is missing.",ck:[
+  C("M","Journal start","Every task opens the project journal first","task opened",{cmd:"orch journal start",j:J("start","agent","Fix order total rounding · plan: fix, lint+unit, image, e2e, deploy")}),
+  C("M","orch init","Re-probes every saved host in parallel; the agent reads only the final JSON line","state ready",{cmd:"orch init"}),
+  C("h11","Probe h11","ssh, Docker, load, foreign objects","ok: 8 cpu, 16 GB"),
+  C("h12","Probe h12","Shared helper: other containers fingerprinted","ok: 2 other containers"),
+  C("h13","Probe h13","ssh, Docker, load, foreign objects","ok: 4 cpu, 8 GB"),
+  C("P","Probe h20","Production only: ssh, never Docker","ok: ssh"),
+  C("M","One summary line","Saved, approved, clean: no question","3 helpers · prod h20 · deploy ./deploy.sh · jobs 5")]},
+ req:{n:"Plan",i:"i-req",x:190,on:"master",d:"Turn the request into a clear, testable plan.",ck:[
+  C("M","Read the request","Reading and planning stay on the master","rounding off by 0.01"),
+  C("M","Past tasks","MEMORY.md of the journal shows earlier fixes and lessons","1 related task found"),
+  C("M","Clear and testable?","Ambiguous rules are asked, never guessed","testable",{j:J("decision","agent","fix in OrderTotal, add unit test · why: repro in plan")})]},
+ inv:{n:"Investigation",i:"i-inv",x:310,on:"M · h11 · prod",d:"Reproduce the problem and find the root cause.",ck:[
+  C("M","Read code, history","Reading is light work","2 suspect commits"),
+  C("P","Live check","Only the master reaches production; GET / SELECT only","total 10.01 on live"),
+  C("M","Pick a helper","Admission, as for every test job","h11 admitted, score 0.71",{cmd:"orch plan unit"}),
+  C("h11","Reproduce","A new failing test, uncommitted files included (--wt, still secret-scanned)","1 red: total 10.01 ≠ 10.00",{cmd:"orch run unit --wt"}),
+  C("M","Root cause","Simplest fix that keeps the design","float rounding in total",{j:J("decision","agent","use decimal rounding · options: decimal, round at display")})]},
+ dev:{n:"Development",i:"i-dev",x:430,on:"master",d:"Write the fix and review it.",ck:[
+  C("M","Code in worktree","Editing stays on the master","2 files changed"),
+  C("M","Review the diff","A review before a long run saves a rerun","no findings")]},
+ unit:{n:"Lint + unit",i:"i-unit",x:550,on:"helpers",d:"Pick a safe helper, run fenced in, leave nothing behind.",ck:[
+  C("M","Guard + scan","The guard lets only orch reach helpers; source is secret-scanned before it leaves","412 files clean"),
+  C("h13","h13 safe now?","Admitted, but less room than h11","ranked lower: 0.47 < 0.71",{st:"skip"}),
+  C("h12","h12 safe now?","Free memory minus the 3 GB job must stay above the 25% reserve","6.2 − 3 = 3.2 GB < 4.0 GB reserve",{st:"skip"}),
+  C("h11","h11 safe now?","Memory, PSI, swap, disk and load under limits","admitted, score 0.71",{cmd:"orch plan unit"}),
+  C("h11","Prep, network on","Own /28 network and cache volume","packages restored"),
+  C("h11","Tests, no network","Network cut first; memory, CPU, process caps and a timeout","148 of 148 passed",{cmd:"orch ci --stages lint,unit",ex:0}),
+  C("h11","Watchdog 10 s","Its own apps: fingerprint, PSI, iowait","nothing else on h11"),
+  C("h11","Clean up","Removes only agentx-* items with the io.orch.agent label","0 agent items left"),
+  C("M","Agent reply","Reads only the final JSON line; one line per job","unit h11 pass 74s | - | next: build+image")],fail:5},
+ build:{n:"Build + image",i:"i-box",x:670,on:"h11",d:"Compile, then build the image where image builds are allowed.",ck:[
+  C("h12","h12 allowed?","Scope lint + tests: no image builds","filtered out: no image builds",{st:"skip"}),
+  C("h11","h11 safe now?","Image builds need scope everything","admitted, score 0.66",{cmd:"orch plan image"}),
+  C("h11","Compile","Same caps, network cut","build ok 41s"),
+  C("h11","Image build","buildx builder on h11, cache capped at 15 GB","image built 118s",{cmd:"orch ci --stages build,image",ex:0})],fail:3,
+  rep:"image h11 pass 118s | - | next: e2e"},
+ e2e:{n:"E2E suite",i:"i-reh",x:790,on:"h11 · h12",d:"Run the end-to-end suite on the best helper.",ck:[
+  C("M","Pick a helper","Both admitted; the higher score wins","h12 0.63 > h11 0.58",{cmd:"orch plan e2e"}),
+  C("h12","Suite","No network, 60 min cap; h12's own apps watched","31 of 31 passed",{cmd:"orch ci --stages e2e",ex:0}),
+  C("h12","Clean up","Only orch's own items","0 agent items left")],fail:1,
+  rep:"e2e h12 pass 412s | - | next: deploy gate"},
+ gate:{n:"Deploy gate",i:"i-lock",x:910,on:"master",d:"orch deploy --check: seven gates, read-only. orch never deploys.",ck:[
+  C("M","setup approved","Approved and unchanged since","approved 2026-10-30"),
+  C("M","production answered","Production servers and a deploy command saved","h20; ./deploy.sh"),
+  C("M","tree clean","Nothing uncommitted or untracked","clean"),
+  C("M","HEAD pushed","The commit is on its upstream","pushed"),
+  C("M","required jobs","Lint and unit passed on a helper for this exact commit","lint, unit passed for HEAD",{ex:0}),
+  C("M","scripts unchanged","Deploy script matches the approved content","matches"),
+  C("P","production reachable","ssh to every production server, read-only","h20 ok",{cmd:"orch deploy --check"})],fail:4,
+  rep:"deploy gate: 7 of 7 met | - | next: deploy (you asked)"},
+ dep:{n:"Deploy",i:"i-dep",x:1030,on:"master → prod",d:"The saved deploy command, only because you asked to deploy.",ck:[
+  C("M","You asked?","Exit 0 alone never deploys; your request in this conversation does","yes: “deploy it”"),
+  C("M","Run ./deploy.sh","Runs on the master and reaches production itself","exit 0, 48 s"),
+  C("P","New version up","The deploy command's own output","h20 restarted"),
+  C("M","Journal it","The agent records the step with its time","recorded",{j:J("step","agent","deploy: ./deploy.sh · ok · 48 s")})],fail:1},
+ live:{n:"Live check",i:"i-post",x:1150,on:"master → prod",d:"Read-only health checks of the saved URLs.",ck:[
+  C("P","Health URLs","GET only, from the master","200 on /health",{cmd:"orch live"}),
+  C("M","Matches plan?","Known issues listed, not hidden","yes")],fail:0},
+ done:{n:"Done",i:"i-done",x:1300,on:"master",d:"Clean every helper and close the task in the journal.",ck:[
+  C("M","Session clean-up","Builder, caches and leftovers removed; a line per helper","h11, h12, h13: 0 agent items",{cmd:"orch gc --session-end"}),
+  C("M","Journal end","Outcome, summary, lessons, open items; MEMORY.md gets a section","task closed",{cmd:"orch journal end",j:J("end","agent","done · rounding fixed, deployed · lesson: test totals with decimals")})]},
+ ask:{n:"Ask you",i:"i-msg",x:130,y:62,on:"you",d:"The agent relays orch's question exactly and never guesses an answer.",ck:[
+  C("M","Relay the ask","Exactly as orch printed it","asked"),
+  C("M","You answer","Your words, nothing invented","answered"),
+  C("M","Save it","One JSON line on stdin via quoted heredoc","saved",{cmd:"orch init --apply <<'EOF'"})]},
+ rb:{n:"Rollback",i:"i-rb",x:1090,y:410,on:"master → prod",d:"The saved rollback command restores the last good version.",ck:[
+  C("M","Run ./rollback.sh","Saved at setup; runs on the master","exit 0, 22 s",{j:J("step","agent","rollback: ./rollback.sh · ok · 22 s")}),
+  C("P","Last good version","orch live again, read-only","200 on /health",{cmd:"orch live"}),
+  C("M","Record why","Difficulty and its resolution go into the journal","recorded",{j:J("difficulty","agent","deploy broke /checkout: missing env var on h20")})]}
+};
+const U=P.unit.ck,S=P.setup.ck;
+const ALT={
+ "setup:first":{d:"No setup in this project yet: orch asks one step per turn and saves each answer at once.",ck:[S[0],
+  C("M","orch init","Nothing saved: state new, step count","state new",{cmd:"orch init"}),
+  C("M","Step 1 · count","“How many helper servers will orch use?”","you: 3",{st:"ask",j:J("decision","orch","helper_count: 3 · user answer")}),
+  C("M","Step 2 · helpers","“For each of the 3 helpers, what do you type after ssh?”","you: app-builder, deploy@192.0.2.12, deploy@192.0.2.13",{st:"ask",cmd:"orch init --apply",j:J("decision","orch","helpers: h11, h12, h13 · user answer")}),
+  C("h11","Probe h11","Resolved with ssh -G, probed in parallel","ok: 8 cpu, 16 GB, no other containers"),
+  C("h12","Probe h12","Other containers found: default scope read-only","ok: 2 other containers"),
+  C("h13","Probe h13","No other containers: default helper only, everything","ok: 4 cpu, 8 GB"),
+  C("M","Step 3 · setup","One message: roles, scopes, production, deploy, health, rollback, alerts","you: ok, but h12 lint + tests; production deploy@192.0.2.20; ./deploy.sh",{st:"ask",j:J("decision","orch","setup: h11, h13 everything; h12 lint + tests; prod h20; deploy ./deploy.sh · user answer")}),
+  C("P","Probe h20","Production only: ssh, never Docker","ok: ssh"),
+  C("M","Step 4 · jobs","Detected from the project; you keep or change them","you: ok (lint, unit, build, image, e2e)",{st:"ask",cmd:"orch init --detect"}),
+  C("M","Step 5 · approve","The guard asks you in a permission prompt","you: yes · images pinned to digests",{st:"ask",cmd:"orch init --approve",j:J("decision","orch","setup approved · user answer")}),
+  C("M","Ready","Saved in .git/orch/; next session: one line","state ready")]},
+ "setup:missing":{d:"Saved earlier, but one answer is still open: orch asks only that.",ck:[S[0],
+  C("M","orch init","Approved setup; the health URL was “later”","state incomplete",{cmd:"orch init"}),
+  S[2],S[3],S[4],S[5],
+  C("M","Only what is missing","Every saved answer is kept","ask: health URL(s) checked after a deploy",{st:"ask",stop:1})]},
+ "ask:health":{d:"One question, one answer, saved at once.",ck:[
+  C("M","Relay the ask","“Health URL(s) checked after a deploy [-]”","asked"),
+  C("M","You answer","Your words","https://shop.example/health"),
+  C("M","Save it","Not a loosening change: the approval is kept","approval: kept",{cmd:"orch init --apply",j:J("decision","orch","deploy.health saved · user answer")})]},
+ "setup:drift":{d:"Approved, but a helper changed underneath: orch names the host, what failed and the fix.",ck:[S[0],
+  C("M","orch init","A probe failed","state drift",{cmd:"orch init"}),
+  C("h11","Probe h11","Docker on h11 does not answer","h11: docker not running",{st:"fail",ex:2,stop:1}),
+  S[3],S[4],S[5],
+  C("M","Show the fix","host: what -> fix, then wait for you","h11: docker down -> start Docker on h11",{st:"ask",stop:1})]},
+ "ask:drift":{d:"The agent waits; no workaround, no other helper picked by hand.",ck:[
+  C("M","Relay the problem","Exactly as orch printed it","asked"),
+  C("h11","You fix it","Docker started on h11","h11 back"),
+  C("M","orch init again","The difficulty is resolved by the next clean probe","probing")]},
+ "unit:oom":{d:"The tests hit their memory cap; orch retries once with 1.5× memory.",ck:[U[0],U[1],U[2],U[3],U[4],
+  C("h11","Tests, no network","Memory cap hit: the kernel killed the test host","out of memory at 3 GB",{st:"retry",ex:3}),
+  C("h11","Retry at 1.5×","orch retries once with 4.5 GB; the agent never retries itself","re-admitted: 12.1 − 4.5 = 7.6 GB"),
+  C("h11","Tests again","Same commit, same caps, more memory","148 of 148 passed",{ex:0,j:J("resolution","orch","oom on first try resolved by the 4.5 GB retry")}),
+  U[6],U[7],C("M","Agent reply","The retry is reported, not hidden","unit h11 pass 151s | oom retry 4.5g | next: build+image")]},
+ "unit:infra":{d:"The first helper drops out mid-job; orch cleans up and retries once on another helper.",ck:[U[0],C("h13","h13 safe now?","Admitted, less room than h12","ranked lower: 0.47 < 0.58",{st:"skip"}),
+  C("h12","h12 safe now?","h11 busy with another heavy job; h12 clears every gate","admitted, score 0.58"),
+  C("h12","Prep, network on","ssh to h12 dropped during prep","infra: ssh connection lost",{st:"retry",ex:5,j:J("difficulty","orch","unit on h12: ssh connection lost")}),
+  C("M","Retry elsewhere","orch removes its items on h12 and retries once on another helper","retry on h11"),
+  C("h11","h11 safe now?","The other job finished; memory is free again","admitted, score 0.69"),
+  U[4],C("h11","Tests, no network","Same caps","148 of 148 passed",{ex:0,j:J("resolution","orch","for the h12 ssh loss: passed on h11")}),U[6],U[7],
+  C("M","Agent reply","warn lines go into the reply","unit h11 pass 96s | - | next: build+image · warn: h12 ssh lost")]},
+ "unit:noadmit":{d:"No helper passes admission. orch waits, then stops with exit 75.",ck:[U[0],C("h13","h13 safe now?","Free memory minus the 3 GB job must stay above the 25% reserve","2.4 − 3 GB < 2.0 GB reserve",{st:"skip"}),
+  C("h12","h12 safe now?","load1 must stay under 0.85 × 8 CPUs","load1 7.4 (need < 6.8)",{st:"skip"}),
+  C("h11","h11 safe now?","The probe cannot reach Docker on h11","h11 docker down → pick none",{st:"fail",ex:75,cmd:"orch ci --stages lint,unit",j:J("difficulty","orch","not-admitted: h11 docker down, h12 load 7.4")})]},
+ "unit:r1":{d:"An app on the shared helper slows down while the tests run; the watchdog kills the job and pauses the helper.",ck:[U[0],C("h13","h13 safe now?","Admitted, less room than h12","ranked lower: 0.47 < 0.61",{st:"skip"}),
+  C("h11","h11 safe now?","h11 busy with an image build","busy: 1 heavy job",{st:"skip"}),
+  C("h12","h12 safe now?","h12 clears every gate","admitted, score 0.61"),
+  C("h12","Tests start","Network cut, caps on","running"),
+  C("h12","Watchdog 10 s","A watched app on h12 stayed over 2× its baseline for 3 checks","r1-guard: job killed, h12 paused 30 min",{st:"fail",ex:6,cmd:"orch ci --stages lint,unit",j:J("difficulty","orch","r1-guard on h12: watched app latency 2.4×")})]},
+ "ask:stop":{d:"Stop in plain words: what stopped, the exact reason line, what you must do.",ck:[
+  C("M","Stop, report","Max 3 sentences, reason quoted exactly; no workaround, no local run","exit 75: h11 docker down"),
+  C("M","Journal end","Outcome blocked, with what is open","task closed: blocked",{j:J("end","agent","blocked · open: start Docker on h11")}),
+  C("h11","You act","Start Docker on h11","h11 back"),
+  C("M","Run again","Same job, same commit; new task","queued",{cmd:"orch ci --stages lint,unit",j:J("start","agent","Retry lint+unit after h11 Docker start")})]},
+ "ask:r1":{d:"h12 stays paused until you check its apps and lift the pause.",ck:[
+  C("M","Stop, report","The agent never unpauses a helper itself","exit 6: h12 paused"),
+  C("M","Journal end","Outcome blocked","task closed: blocked",{j:J("end","agent","blocked · open: check h12 apps, uncordon")}),
+  C("h12","You check apps","h12's own apps healthy again","apps healthy"),
+  C("M","You unpause","Only on your word","h12 back",{cmd:"orch uncordon h12",j:J("start","agent","Resume lint+unit after h12 check")})]},
+ "gate:checkonly":{d:"“Can we deploy now?” answered by the gate alone: a check, never a deploy.",ck:[
+  P.gate.ck[0],P.gate.ck[1],P.gate.ck[2],P.gate.ck[3],
+  C("M","required jobs","Lint and unit passed for this commit now","lint, unit passed for HEAD",{ex:0,j:J("resolution","orch","required jobs met after orch ci")}),
+  P.gate.ck[5],P.gate.ck[6],
+  C("M","Report only","You asked only to check: nothing deployed","yes, all 7 gates met",{j:J("end","agent","done · deploy check: ready, not deployed (check only)")})]}
+};
+const Y=205;
+const LOOP=[
+ ["unit","dev","tests fail","--fail","up",100],
+ ["build","dev","build fails","--fail","up",150],
+ ["e2e","inv","e2e fails → find the cause","--fail","up",195],
+ ["gate","unit","exit 7: tests not run for this commit","--wait","under"],
+ ["setup","ask","question","--wait","halt"],
+ ["ask","setup","answer saved","--wait","halt2"],
+ ["unit","ask","no safe helper / apps hurt → stop","--wait","stop"],
+ ["dep","rb","deploy fails","--fail","down"],
+ ["live","rb","health fails","--fail","down"],
+ ["rb","inv","back to investigation","--fail","back"]
+];
+const MAIN=["setup","req","inv","dev","unit","build","e2e","gate","dep","live","done"].map(k=>[k]);
+const tail=k=>MAIN.slice(MAIN.findIndex(v=>v[0]===k));
+const STORIES=[
+ {g:"Setup",n:"First use: interview",i:"i-setup",v:[["setup","alt","first"]],end:"setup ready"},
+ {g:"Setup",n:"One answer missing",i:"i-msg",v:[["setup","alt","missing"],["ask","alt","health"],["setup"]],end:"setup ready"},
+ {g:"Setup",n:"Helper down at start",i:"i-unplug",v:[["setup","alt","drift"],["ask","alt","drift"],["setup"]],end:"setup ready"},
+ {g:"Delivery",n:"Clean release",i:"i-trophy",v:MAIN,end:"release complete"},
+ {g:"Delivery",n:"Unit tests fail",i:"i-unit",v:[["setup"],["req"],["inv"],["dev"],["unit","fail","2 of 148 tests failed","unit h11 test-fail 70s | 2 failed | next: Development"],["dev"],...tail("unit")],end:"release complete"},
+ {g:"Delivery",n:"E2E fails",i:"i-reh",v:[["setup"],["req"],["inv"],["dev"],["unit"],["build"],["e2e","fail","checkout flow red","e2e h12 test-fail 388s | 1 failed | next: Investigation"],...tail("inv")],end:"release complete"},
+ {g:"Delivery",n:"“Can we deploy?” check only",i:"i-lock",v:[["setup"],["gate","fail","unit not run for HEAD a1b2c3d","deploy --check exit 7 | required jobs | fix: orch ci --stages lint,unit"],["unit"],["gate","alt","checkonly"]],end:"check answered, nothing deployed"},
+ {g:"Delivery",n:"Release rolled back",i:"i-rb",v:[...MAIN.slice(0,9),["live","fail","502 on /checkout"],["rb"],...tail("inv")],end:"release complete"},
+ {g:"Helpers",n:"Out of memory, retried",i:"i-mem",v:[["setup"],["req"],["inv"],["dev"],["unit","alt","oom"],...tail("build")],end:"release complete"},
+ {g:"Helpers",n:"Helper drops out",i:"i-unplug",v:[["setup"],["req"],["inv"],["dev"],["unit","alt","infra"],...tail("build")],end:"release complete"},
+ {g:"Helpers",n:"No safe helper",i:"i-gauge",v:[["setup"],["req"],["inv"],["dev"],["unit","alt","noadmit"],["ask","alt","stop"],...tail("unit")],end:"release complete"},
+ {g:"Helpers",n:"Helper's apps hurt",i:"i-pulse",v:[["setup"],["req"],["inv"],["dev"],["unit","alt","r1"],["ask","alt","r1"],...tail("unit")],end:"release complete"}
+];
+const GROUPS={Setup:"Setup interview",Delivery:"Delivery loop",Helpers:"Helper behaviour"};
+const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+const svg=document.getElementById("flow");
+const mk=(t,a,p)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e};
+const pos=k=>({x:P[k].x,y:P[k].y||Y});
+const routes={};let tiles={},token;
+function arcD(a,b,kind,h){const A=pos(a),B=pos(b);
+  if(kind==="up")return `M${A.x},${A.y-38} C${A.x},${A.y-38-h} ${B.x},${B.y-38-h} ${B.x},${B.y-38}`;
+  if(kind==="under")return `M${A.x},${A.y+82} C${A.x},${A.y+150} ${B.x},${B.y+150} ${B.x},${B.y+82}`;
+  if(kind==="halt")return `M${A.x-10},${A.y-38} L${B.x-10},${B.y+30}`;
+  if(kind==="halt2")return `M${A.x+10},${A.y+30} L${B.x+10},${B.y-38}`;
+  if(kind==="stop")return `M${A.x-26},${A.y-28} C${A.x-110},${A.y-120} ${B.x+190},${B.y+40} ${B.x+31},${B.y+10}`;
+  if(kind==="down")return `M${A.x},${A.y+82} C${A.x},${A.y+130} ${B.x+(A.x-B.x)*0.2},${B.y-40} ${B.x+(A.x>B.x?30:A.x<B.x?-30:0)},${B.y-30}`;
+  if(kind==="back")return `M${A.x-34},${A.y} C${A.x-300},${A.y+30} ${B.x+60},${B.y+170} ${B.x},${B.y+82}`;
+  return `M${A.x+38},${A.y} L${B.x-38},${B.y}`}
+const LABEL_DY={halt:-8,halt2:10,up:-6,down:0,back:16,stop:-8,under:16};
+function build(){
+  svg.innerHTML="";
+  const defs=mk("defs",{},svg);
+  const gl=mk("radialGradient",{id:"tg"},defs);mk("stop",{offset:"0","stop-color":"var(--run)","stop-opacity":".85"},gl);mk("stop",{offset:"1","stop-color":"var(--run)","stop-opacity":"0"},gl);
+  const order=MAIN.map(v=>v[0]);
+  for(let i=1;i<order.length;i++){const d=arcD(order[i-1],order[i]);mk("path",{d,stroke:"var(--rail)","stroke-width":3,fill:"none"},svg);mk("path",{d,stroke:"var(--run)","stroke-width":3,fill:"none",class:"edge-flow",opacity:0,id:"e-"+order[i-1]+"-"+order[i]},svg);routes[order[i-1]+">"+order[i]]={d}}
+  for(const [a,b,label,col,kind,h] of LOOP){const d=arcD(a,b,kind,h);routes[a+">"+b]={d};
+    if(kind==="stop"||kind==="under")routes[b+">"+a]={d,rev:true};
+    const p=mk("path",{d,stroke:"var("+col+")","stroke-width":2,fill:"none","stroke-dasharray":"5 6",opacity:.55},svg);
+    const L=p.getTotalLength(),m=p.getPointAtLength(L*(kind==="back"?0.45:kind==="stop"?0.62:0.5));const hk=kind==="halt"||kind==="halt2";
+    const t=mk("text",{x:hk?m.x+30:m.x,y:m.y+(LABEL_DY[kind]||4),"text-anchor":hk?"start":"middle",class:"arc-label",fill:"var("+col+")"},svg);t.textContent=(kind==="halt"?"↑ ":kind==="halt2"?"↓ ":"")+label}
+  tiles={};
+  for(const k in P){const {x,y}=pos(k);const g=mk("g",{transform:`translate(${x},${y})`},svg);
+    const r=(k==="ask"||k==="rb")?28:34;
+    const halo=mk("circle",{r:r+18,fill:"url(#tg)",opacity:0},g);
+    mk("circle",{r,fill:"var(--surface)",stroke:"var(--border)","stroke-width":2},g);
+    const ring=mk("circle",{r:r+5,fill:"none",stroke:"var(--run)","stroke-width":3,"stroke-linecap":"round",transform:"rotate(-90)","stroke-dasharray":`0 ${2*Math.PI*(r+5)}`},g);
+    const ic=mk("use",{href:"#"+P[k].i,x:-12,y:-12,width:24,height:24,fill:"none",stroke:"var(--fg)","stroke-width":2,"stroke-linecap":"round","stroke-linejoin":"round"},g);
+    // the Ask tile sits above the row: its labels go to the left so the arcs stay clear
+    const side=k==="ask";
+    mk("text",{x:side?-r-12:0,y:side?-2:r+24,"text-anchor":side?"end":"middle",class:"tile-name"},g).textContent=P[k].n;
+    mk("text",{x:side?-r-12:0,y:side?14:r+40,"text-anchor":side?"end":"middle",class:"tile-sub"},g).textContent=P[k].on;
+    const badge=mk("g",{transform:`translate(${r*0.72},${-r*0.72})`,opacity:0},g);const bc=mk("circle",{r:11,fill:"var(--accent)"},badge);const bu=mk("use",{href:"#i-check",x:-7,y:-7,width:14,height:14,fill:"none",stroke:"var(--surface)","stroke-width":3,"stroke-linecap":"round","stroke-linejoin":"round"},badge);
+    tiles[k]={g,halo,ring,ic,r,badge,bc,bu}}
+  token=mk("g",{},svg);mk("circle",{r:16,fill:"url(#tg)"},token);mk("circle",{r:7,fill:"var(--run)",stroke:"var(--surface)","stroke-width":2.5},token);
+}
+// ---------- run state ----------
+let si=0,vi=0,ci=0,mode="checks",tm=0,mt=0,playing=!reduce,speed=1.2,curPath=null,curLen=0,curRev=false,iter=1,events=0,phaseStopped=false,phaseFailed=false;
+const $=id=>document.getElementById(id);
+const els={checks:$("checks"),log:$("log"),jr:$("jr")};
+const visit=()=>STORIES[si].v[vi];
+const altKey=v=>v[1]==="alt"?v[0]+":"+v[2]:"";
+let CK=[];
+// ---------- journal feed: what journal.jsonl would hold so far ----------
+let jn=0;const openDiff={};
+function jadd(ty,by,tx){jn++;const d=document.createElement("div");d.innerHTML=`<span class="n"></span><span class="ty ${ty}"></span><span class="by"></span><span></span>`;
+  d.children[0].textContent="#"+jn;d.children[1].textContent=ty;d.children[2].textContent=by;d.children[3].textContent=tx;
+  els.jr.appendChild(d);while(els.jr.children.length>120)els.jr.firstChild.remove();els.jr.scrollTop=els.jr.scrollHeight;$("bdJr").textContent=jn+" records";return jn}
+function jcheck(c,k){
+  if(c.j){const n=jadd(c.j[0],c.j[1],c.j[2]);if(c.j[0]==="difficulty")openDiff[k]=n;if(c.j[0]==="resolution")delete openDiff[k];return}
+  // orch records its own failures and every one of its verbs by itself
+  if(c.st==="fail"){openDiff[k]=jadd("difficulty","orch",(c.cmd?c.cmd.replace(/^orch /,""):c.t)+": "+c.f);return}
+  if(c.cmd&&/^orch /.test(c.cmd)&&c.st!=="ask"&&c.st!=="skip")jadd("step","orch",c.cmd.replace(/^orch /,"")+" · "+c.f)}
+function enterPhase(){const v=visit(),p=P[v[0]],ak=altKey(v),alt=ALT[ak];
+  CK=(alt?alt.ck:p.ck).map(c=>Object.assign({},c));ci=0;mode="checks";tm=0;
+  if(v[1]==="fail"){const fi=p.fail;CK=CK.slice(0,fi+1);Object.assign(CK[fi],{st:"fail",f:v[2]});if(CK[fi].ex===0)CK[fi].ex=v[0]==="gate"?7:1;delete CK[fi].j}
+  phaseFailed=CK.some(c=>c.st==="fail");phaseStopped=false;
+  $("phIcon").innerHTML=`<use href="#${p.i}"/>`;
+  $("phName").textContent=p.n;$("phDesc").textContent=alt?alt.d:p.d;
+  $("bdPhase").textContent=(vi+1)+" / "+STORIES[si].v.length;
+  $("reply").hidden=true;hiEx(null);
+  els.checks.innerHTML="";
+  CK.forEach(c=>{const m=M[c.lane];const li=document.createElement("li");li.className="chk pending";li.innerHTML=`<span class="st"><svg class="ico"><use href="#i-dot"/></svg></span><span><span class="t"></span><span class="w"></span><span class="c"></span><span class="f"></span></span><span class="mchip" style="--c:var(${m.c})"><svg class="ico"><use href="#${m.i}"/></svg>${m.n}</span>`;
+    li.querySelector(".t").textContent=c.t;li.querySelector(".w").textContent=c.w;const ce=li.querySelector(".c");if(c.cmd)ce.textContent="$ "+c.cmd;else ce.remove();els.checks.appendChild(li)});
+  for(const k in tiles)tiles[k].halo.setAttribute("opacity",k===v[0]?0.7:0);
+  buildLanes();renderSel(v[0],ak);
+  log("info",p.n,"phase started on "+p.on);
+  state("run","running "+p.n.toLowerCase());
+}
+const ICON={pass:"i-check",fail:"i-x",skip:"i-skip",retry:"i-retry",run:"i-retry",ask:"i-msg"};
+function setCheck(n,st){const li=els.checks.children[n];if(!li)return;li.className="chk "+st+(st==="run"?" cur":"");li.querySelector(".st").innerHTML=`<svg class="ico"><use href="#${ICON[st]||"i-dot"}"/></svg>`;
+  if(st!=="run")li.querySelector(".f").textContent=CK[n].f}
+function ringProgress(k,frac,col){const t=tiles[k];const Cf=2*Math.PI*(t.r+5);t.ring.setAttribute("stroke-dasharray",`${Cf*frac} ${Cf}`);t.ring.setAttribute("stroke",col);t.ring.setAttribute("opacity",frac>0?1:0)}
+function hiEx(code){document.querySelectorAll("#exits tr").forEach(r=>r.classList.toggle("hi",code!=null&&r.id==="ex-"+code))}
+function showReply(txt){if(!txt)return;$("replyT").textContent=txt;$("reply").hidden=false;log("say","agent",txt)}
+// ---------- lane view: each check of the phase is a hoop on its machine ----------
+const LY={M:42,h11:104,h12:166,h13:228,P:290};
+const G=["Allowed","Memory","PSI","Swap","Disk","Load"];
+const OK=t=>["pass",t],NO=t=>["fail",t],NA=t=>["na",t];
+const h11ok=(job,free)=>[OK("scope everything, Docker up"),OK(`${free} − ${job} = ${(free-job).toFixed(1)} GB ≥ 4.0 GB reserve`),OK("0.0 < 10"),OK("0 pages/s < 50"),OK("71 GB free ≥ 20 GB"),OK("0.4 < 6.8 (0.85 × 8)")];
+const H13=(job,free)=>[OK("scope everything, Docker up"),free-job>=2?OK(`${free} − ${job} = ${(free-job).toFixed(1)} GB ≥ 2.0 GB reserve`):NO(`${free} − ${job} = ${(free-job).toFixed(1)} GB < 2.0 GB reserve`),OK("0.3 < 10"),OK("0 pages/s < 50"),OK("38 GB free ≥ 20 GB"),OK("0.5 < 3.4 (0.85 × 4)")];
+const SCORE="Score = 0.5 × memory room + 0.3 × idle CPU + 0.2 × affinity. The highest admitted helper wins; one heavy job per helper (2 with max_heavy on a dedicated helper, never on production).";
+const SEL={
+ inv:{job:"unit --wt (repro)",pick:"h11",note:"A repro is a normal test job: same admission, same caps, no network. --node is never used to pick a helper by hand.",c:{
+  h11:{g:h11ok(3,12.1),s:0.71,mem:0.57,why:"Most memory room, idle CPU"},
+  h12:{g:[OK("scope lint + tests, Docker up"),NO("6.2 − 3 = 3.2 GB < 4.0 GB reserve"),OK("2.0 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),OK("1.9 < 6.8 (0.85 × 8)")],mem:0.2,why:"Its own containers use the memory"},
+  h13:{g:H13(3,5.1),s:0.47,mem:0.26,why:"Admitted, less room than h11"}}},
+ unit:{job:"unit (3 GB)",pick:"h11",note:SCORE,c:{
+  h11:{g:h11ok(3,12.1),s:0.71,mem:0.57,why:"Most memory room, idle CPU"},
+  h12:{g:[OK("scope lint + tests, Docker up"),NO("6.2 − 3 = 3.2 GB < 4.0 GB reserve"),OK("2.0 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),OK("1.9 < 6.8 (0.85 × 8)")],mem:0.2,why:"Its own containers use the memory: next helper"},
+  h13:{g:H13(3,5.1),s:0.47,mem:0.26,why:"Admitted, less room than h11"}}},
+ build:{job:"image (4 GB)",pick:"h11",note:"Image builds need scope everything: h11 and h13 have it, h12 does not. Then memory decides.",c:{
+  h11:{g:h11ok(4,12.1),s:0.66,mem:0.5,why:"Room for the 4 GB build"},
+  h12:{g:[NO("scope lint + tests: no image builds")],why:"You chose lint + tests for h12"},
+  h13:{g:H13(4,5.1),mem:0.14,why:"Not enough memory for a 4 GB build"}}},
+ e2e:{job:"e2e (2 GB)",pick:"h12",note:SCORE,c:{
+  h11:{g:h11ok(2,9.8),s:0.58,mem:0.49,why:"Admitted, ranked lower: busier CPU after the image build"},
+  h12:{g:[OK("scope lint + tests: e2e allowed"),OK("8.4 − 2 = 6.4 GB ≥ 4.0 GB reserve"),OK("0.6 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),OK("0.3 < 6.8 (0.85 × 8)")],s:0.63,mem:0.4,why:"Most idle CPU right now"},
+  h13:{g:H13(2,5.1),s:0.49,mem:0.38,why:"Admitted, ranked lower"}}},
+ "unit:infra":{job:"unit (3 GB)",pick:"h11",note:"Admission picked h12 first. When ssh dropped, orch cleaned up h12 and retried once on h11 (no second retry: exit 5).",c:{
+  h11:{g:h11ok(3,12.1),s:0.69,mem:0.57,why:"Busy at first; free on the retry"},
+  h12:{g:[OK("scope lint + tests, Docker up"),OK("9.6 − 3 = 6.6 GB ≥ 4.0 GB reserve"),OK("1.1 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),OK("0.8 < 6.8 (0.85 × 8)")],s:0.58,mem:0.41,tag:"admitted → infra",tc:"fail",why:"ssh lost during prep; its items removed"},
+  h13:{g:H13(3,5.1),s:0.47,mem:0.26,why:"Admitted, ranked below h12 and h11"}}},
+ "unit:noadmit":{job:"unit (3 GB)",pick:"",note:"No helper passes: orch waits up to 10 min, then exits 75 not-admitted. The agent stops and quotes the reason line; it never picks a helper by hand or runs the tests on the master.",c:{
+  h11:{g:[NO("probe: docker down")],tag:"unreachable",tc:"fail",why:"Docker on h11 is not running"},
+  h12:{g:[OK("scope lint + tests, Docker up"),OK("9.6 − 3 = 6.6 GB ≥ 4.0 GB reserve"),OK("4.0 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),NO("7.4 (need < 6.8 = 0.85 × 8)")],mem:0.41,why:"Busy: load over the limit"},
+  h13:{g:H13(3,2.4),mem:0.05,why:"Busy: memory taken by its own load"}}},
+ "unit:r1":{job:"unit (3 GB)",pick:"h12",note:"h12 was admitted, but its own apps come first: the watchdog compares them with the baseline taken before the job.",c:{
+  h11:{g:[OK("scope everything, Docker up"),NO("busy: one heavy job already running")],tag:"busy",tc:"wait",why:"An image build holds h11"},
+  h12:{g:[OK("scope lint + tests, Docker up"),OK("9.6 − 3 = 6.6 GB ≥ 4.0 GB reserve"),OK("1.1 < 10"),OK("0 pages/s < 50"),OK("54 GB free ≥ 20 GB"),OK("0.8 < 6.8 (0.85 × 8)")],s:0.61,mem:0.41,tag:"admitted → r1-guard",tc:"fail",why:"A watched app slowed down: job killed, h12 paused"},
+  h13:{g:H13(3,5.1),s:0.47,mem:0.26,why:"Admitted, ranked below h12"}}}
+};
+const NOTE={setup:"Setup runs on the master: orch probes every saved host in parallel (helpers with Docker, production with ssh only). The skill holds no host; all of them are your saved answers.",req:"Runs on the master: reading the request and the journal's MEMORY.md is light work.",dev:"Editing and reviewing stay on the master.",gate:"No helper: orch deploy --check reads the saved setup, git and runs.jsonl, and reaches production read-only.",dep:"No helper and no orch: the master runs your saved deploy command, only because you asked to deploy.",live:"No helper: orch live checks the saved health URLs read-only.",done:"No helper work: orch gc --session-end clears every helper, then the journal is closed.",ask:"No helper: the master waits for you.",rb:"No helper: the master runs your saved rollback command."};
+const lanes=$("lanes");let LH=[],lt=null,lmove=null,lbub=null,lbubT=null;
+function lx(n,N){return N<=1?780:250+n*(1080/(N-1))}
+function buildLanes(){
+  lanes.innerHTML="";const d=mk("defs",{},lanes);const g=mk("radialGradient",{id:"lg"},d);mk("stop",{offset:"0","stop-color":"var(--run)","stop-opacity":".8"},g);mk("stop",{offset:"1","stop-color":"var(--run)","stop-opacity":"0"},g);
+  for(const k in LY){const m=M[k],y=LY[k];mk("rect",{x:185,y:y-22,width:1205,height:44,rx:22,fill:"var(--surface2)"},lanes);
+    mk("use",{href:"#"+m.i,x:16,y:y-11,width:22,height:22,fill:"none",stroke:"var("+m.c+")","stroke-width":2,"stroke-linecap":"round","stroke-linejoin":"round"},lanes);
+    mk("text",{x:46,y:y-2,class:"lane-name"},lanes).textContent=m.n;mk("text",{x:46,y:y+12,class:"lane-ip"},lanes).textContent=m.ip}
+  const N=CK.length;LH=[];
+  for(let n=1;n<N;n++){const x1=lx(n-1,N),y1=LY[CK[n-1].lane],x2=lx(n,N),y2=LY[CK[n].lane],mx=(x1+x2)/2;
+    mk("path",{d:`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`,fill:"none",stroke:"var(--rail)","stroke-width":2.5,id:"lp"+n},lanes)}
+  CK.forEach((c,n)=>{const x=lx(n,N),y=LY[c.lane];const gg=mk("g",{transform:`translate(${x},${y})`},lanes);
+    const halo=mk("ellipse",{rx:30,ry:30,fill:"url(#lg)",opacity:0},gg);
+    const ring=mk("ellipse",{rx:15,ry:19,fill:"var(--surface)",stroke:"var(--border)","stroke-width":3.5},gg);
+    const ic=mk("use",{href:"#i-dot",x:-8,y:-8,width:16,height:16,fill:"none",stroke:"var(--muted)","stroke-width":2.5,"stroke-linecap":"round","stroke-linejoin":"round"},gg);
+    // labels: master above, production below, helpers alternate so neighbours on one lane do not collide
+    const above=c.lane==="M"?n%2===0||N<8:c.lane!=="P"&&n%2===1;
+    mk("text",{y:above?-28:33,"text-anchor":"middle",class:"hoop-t"},gg).textContent=(n+1)+". "+c.t;
+    LH.push({halo,ring,ic,x,y})});
+  lt=mk("g",{opacity:N?1:0},lanes);mk("circle",{r:13,fill:"url(#lg)"},lt);mk("circle",{r:5.5,fill:"var(--run)",stroke:"var(--surface)","stroke-width":2},lt);
+  if(LH[0])lt.setAttribute("transform",`translate(${LH[0].x-60},${LH[0].y})`);
+  lbub=mk("g",{opacity:0},lanes);lbub._r=mk("rect",{x:-140,y:-50,width:280,height:30,rx:15,fill:"var(--surface)",stroke:"var(--wait)","stroke-width":1.5},lbub);lbubT=mk("text",{y:-30,"text-anchor":"middle",class:"bub-t"},lbub);
+  lmove=null;
+}
+function laneRun(n){const h=LH[n];if(!h)return;h.halo.setAttribute("opacity",.8);h.ring.setAttribute("stroke","var(--run)");h.ic.setAttribute("href","#i-retry");h.ic.setAttribute("stroke","var(--run)");
+  const from=n===0?{x:h.x-60,y:h.y}:LH[n-1];lmove={a:from,b:h,p:n>0?$("lp"+n):null,t:0};lbub.setAttribute("opacity",0)}
+const STCOL={fail:"var(--fail)",skip:"var(--wait)",retry:"var(--wait)",ask:"var(--wait)",pass:"var(--accent)"};
+function laneDone(n,st){const h=LH[n];if(!h)return;const col=STCOL[st];h.halo.setAttribute("opacity",0);h.ring.setAttribute("stroke",col);
+  h.ic.setAttribute("href","#"+ICON[st]);h.ic.setAttribute("stroke",col);const lp=$("lp"+n);if(lp)lp.setAttribute("stroke",st==="fail"?"var(--fail)":"var(--run)");
+  if(st!=="pass"){lbubT.textContent=st==="skip"?"↻ "+CK[n].f+" → next helper":st==="retry"?"↻ "+CK[n].f+" → orch retries":st==="ask"?"? "+CK[n].f:"✕ "+CK[n].f;
+    const w=Math.min(760,Math.max(180,lbubT.getComputedTextLength()+30));lbub._r.setAttribute("x",-w/2);lbub._r.setAttribute("width",w);lbub._r.setAttribute("stroke",col);
+    // the master lane is the top one: its bubble goes below the hoop so it stays inside the drawing
+    const dy=h.y<60?78:-4;
+    lbub.setAttribute("transform",`translate(${Math.min(1390-w/2,Math.max(200+w/2,h.x))},${h.y+dy})`);lbub.setAttribute("opacity",1)}}
+function laneFrame(dt){if(!lmove||!lt)return;lmove.t=Math.min(1,lmove.t+dt*speed*2.2);const u=lmove.t,e=u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2;let x,y;
+  if(lmove.p){const L=lmove.p.getTotalLength(),pt=lmove.p.getPointAtLength(L*e);x=pt.x;y=pt.y}else{x=lmove.a.x+(lmove.b.x-lmove.a.x)*e;y=lmove.b.y}lt.setAttribute("transform",`translate(${x},${y})`);if(u>=1)lmove=null}
+function renderSel(k,ak){const box=$("sel"),note=$("selnote");box.innerHTML="";const s=SEL[ak]||SEL[k];
+  $("bdLane").textContent=P[k].n+(s?" · job "+s.job:"");
+  const txt=s?s.note:NOTE[k]||"";note.hidden=!txt;note.innerHTML=`<svg class="ico"><use href="#${s?"i-gauge":"i-monitor"}"/></svg>`;note.appendChild(document.createTextNode(txt));
+  box.hidden=!s;if(!s)return;
+  for(const h of ["h11","h12","h13"]){const c=s.c[h],m=M[h],chosen=s.pick===h,blocked=c.g[0][0]!=="pass",unsafe=!blocked&&c.g.some(r=>r[0]==="fail");
+    const d=document.createElement("div");d.className="sc"+(chosen&&!c.tc?" chosen":(blocked||unsafe||c.tc)?" out":"");d.style.setProperty("--c","var("+m.c+")");
+    const tag=c.tag?`<span class="badge ${c.tc||""}">${c.tag}</span>`:chosen?'<span class="badge ok">chosen</span>':blocked?'<span class="badge fail">filtered out</span>':unsafe?'<span class="badge wait">not safe now</span>':'<span class="badge">ranked lower</span>';
+    let rows="";G.forEach((lb,i)=>{const r=c.g[i]||(blocked||unsafe?["na","not reached"]:null);if(!r)return;const v=r[0];
+      rows+=`<span class="lb">${lb}</span><svg class="gi ico ${v}"><use href="#${v==="pass"?"i-check":v==="fail"?"i-x":"i-minus"}"/></svg><span class="tx ${v==="na"?"na":""}"></span>`});
+    d.innerHTML=`<div class="hd"><span><svg class="ico"><use href="#${m.i}"/></svg>${m.n}</span>${tag}</div><div class="gates">${rows}</div>
+      <div class="meter" role="img" aria-label="memory room ${Math.round((c.mem||0)*100)}%"><i style="width:${Math.round((c.mem||0)*100)}%;${unsafe?"background:var(--fail)":""}"></i></div>
+      <div class="score"><span>Score</span><b>${c.s?c.s.toFixed(2):"–"}</b></div><div class="why"></div>`;
+    const txs=d.querySelectorAll(".tx");let j=0;G.forEach((_,i)=>{const r=c.g[i]||(blocked||unsafe?["na","not reached"]:null);if(r)txs[j++].textContent=r[1]});
+    d.querySelector(".why").textContent=c.why;box.appendChild(d)}}
+function markTile(k,kind){const t=tiles[k];const col=kind==="ok"?"var(--accent)":kind==="wait"?"var(--wait)":"var(--fail)";
+  t.badge.setAttribute("opacity",1);t.bc.setAttribute("fill",col);t.bu.setAttribute("href",kind==="ok"?"#i-check":kind==="wait"?"#i-msg":"#i-x");t.ic.setAttribute("stroke",col)}
+function resetTiles(){for(const k in tiles){const t=tiles[k];t.badge.setAttribute("opacity",0);t.ic.setAttribute("stroke","var(--fg)");ringProgress(k,0,"var(--run)")}document.querySelectorAll(".edge-flow").forEach(e=>e.setAttribute("opacity",0))}
+function state(cls,txt){const b=$("bdState");b.className="badge "+cls;b.textContent=txt}
+const t0=performance.now();
+const KL={pass:"PASS",fail:"FAIL",skip:"SKIP",retry:"RETRY",info:"INFO",run:"RUN",wait:"WAIT",say:"SAY",ask:"ASK"};
+function log(kind,where,msg){events++;const d=document.createElement("div");const s=((performance.now()-t0)/1000).toFixed(1).padStart(6," ");
+  d.innerHTML=`<span class="ts"></span><span class="k ${kind}"></span><span></span>`;d.children[0].textContent=s+"s";d.children[1].textContent=KL[kind];d.children[2].textContent=where+" · "+msg;
+  els.log.appendChild(d);while(els.log.children.length>150)els.log.firstChild.remove();els.log.scrollTop=els.log.scrollHeight;$("bdCount").textContent=events+" events"}
+function startStory(n){si=n;vi=0;iter=1;resetTiles();els.log.innerHTML="";events=0;els.jr.innerHTML="";jn=0;for(const k in openDiff)delete openDiff[k];$("bdJr").textContent="0 records";
+  document.querySelectorAll(".story").forEach((b,i)=>b.setAttribute("aria-pressed",i===n?"true":"false"));
+  $("bdStory").textContent=STORIES[n].n;$("bdIter").textContent="pass 1";
+  const p0=pos(visit()[0]);token.setAttribute("transform",`translate(${p0.x},${p0.y})`);
+  log("info","story",STORIES[n].n);enterPhase()}
+const ORD=MAIN.map(v=>v[0]);
+const isAfter=(k,b)=>ORD.indexOf(k)>ORD.indexOf(b);
+function tick(dt){
+  const k=visit()[0];
+  if(mode==="checks"){
+    tm+=dt*speed;
+    if(ci<CK.length){
+      if(!CK[ci]._run){CK[ci]._run=1;setCheck(ci,"run");laneRun(ci)}
+      if(tm>=0.85){const c=CK[ci];setCheck(ci,c.st);laneDone(ci,c.st);log(c.st,M[c.lane].n,c.t+" → "+c.f);if(c.ex!=null)hiEx(c.ex);jcheck(c,k);
+        ringProgress(k,(ci+1)/CK.length,c.st==="fail"?"var(--fail)":"var(--run)");ci++;tm=0;
+        if(c.stop&&c.st!=="fail"){phaseStopped=true;mode="verdict";tm=0;markTile(k,"wait");state("wait","waiting for you")}
+        else if(c.st==="fail"&&!c.stop){mode="verdict";tm=0;markTile(k,"fail");state("fail",P[k].n.toLowerCase()+" failed");showReply(visit()[3])}}
+    } else {mode="verdict";tm=0;markTile(k,"ok");ringProgress(k,1,"var(--accent)");log("pass",P[k].n,"phase passed");state("ok",P[k].n.toLowerCase()+" passed");
+      if(openDiff[k]){jadd("resolution","orch","for #"+openDiff[k]+": the same command passed");delete openDiff[k]}
+      if(!altKey(visit()))showReply(P[k].rep)}
+  } else if(mode==="verdict"){
+    tm+=dt*speed;const rerouted=phaseFailed||phaseStopped;
+    if(tm>=(rerouted?1.6:0.7)){
+      if(vi>=STORIES[si].v.length-1){mode="end";tm=0;state("ok",STORIES[si].end);log("pass","story",STORIES[si].end);return}
+      const a=k,b=STORIES[si].v[vi+1][0];
+      if(rerouted){iter++;$("bdIter").textContent="pass "+iter;log("wait","route",P[a].n+" → "+P[b].n);state("wait","rerouting to "+P[b].n.toLowerCase())}
+      const r=routes[a+">"+b]||{d:`M${pos(a).x},${pos(a).y} L${pos(b).x},${pos(b).y}`};
+      curPath=mk("path",{d:r.d,visibility:"hidden"},svg);curLen=curPath.getTotalLength();curRev=!!r.rev;mt=0;mode="move";
+      const e=$("e-"+a+"-"+b);if(e)e.setAttribute("opacity",.9);
+      if(rerouted||a==="rb"||a==="ask"){for(const q of ORD){if(q===b||isAfter(q,b)){tiles[q].badge.setAttribute("opacity",0);tiles[q].ic.setAttribute("stroke","var(--fg)");ringProgress(q,0,"var(--run)")}}}
+    }
+  } else if(mode==="move"){
+    mt+=dt*speed*0.75;const u=Math.min(1,mt);const e=u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2;const p=curPath.getPointAtLength(curLen*(curRev?1-e:e));token.setAttribute("transform",`translate(${p.x},${p.y})`);
+    if(u>=1){curPath.remove();vi++;enterPhase()}
+  } else if(mode==="end"){tm+=dt;if(tm>2.4)startStory((si+1)%STORIES.length)}
+}
+let last=0;
+function frame(ts){const dt=Math.min(0.05,(ts-last)/1000||0);last=ts;if(playing){tick(dt);laneFrame(dt)}
+  const pulse=0.55+0.25*Math.sin(ts/260);const v=visit();if(v&&tiles[v[0]])tiles[v[0]].halo.setAttribute("opacity",mode==="move"?0:pulse);
+  requestAnimationFrame(frame)}
+const bPlay=$("bPlay");
+function setPlay(){bPlay.innerHTML=`<svg class="ico"><use href="#${playing?"i-pause":"i-play"}"/></svg><span>${playing?"Pause":"Play"}</span>`}
+bPlay.addEventListener("click",()=>{playing=!playing;setPlay()});
+$("bStep").addEventListener("click",()=>{playing=false;setPlay();
+  if(mode==="checks"){tick(0.001);tick(0.9/speed);laneFrame(1)}else if(mode==="verdict"){tick(2/speed)}else if(mode==="move"){mt=1;tick(0)}else if(mode==="end"){startStory((si+1)%STORIES.length)}});
+$("spd").addEventListener("input",e=>{speed=+e.target.value});
+const sw=$("stories");let grp="";
+STORIES.forEach((s,n)=>{if(s.g!==grp){grp=s.g;const h=document.createElement("span");h.className="grp";h.textContent=GROUPS[grp];sw.appendChild(h)}
+  const b=document.createElement("button");b.type="button";b.className="story";b.innerHTML=`<svg class="ico"><use href="#${s.i}"/></svg>`;b.appendChild(document.createTextNode(s.n));b.addEventListener("click",()=>startStory(n));sw.appendChild(b)});
+const mw=$("machines");
+for(const k in M){const m=M[k];const d=document.createElement("div");d.className="mc";d.style.setProperty("--c","var("+m.c+")");
+  d.innerHTML=`<div class="hd"><svg class="ico"><use href="#${m.i}"/></svg><div><b></b><div class="ip"></div></div></div><p class="r"></p><p class="p"><strong>Picked: </strong></p><div class="jobs"></div>`;
+  d.querySelector("b").textContent=m.n;d.querySelector(".ip").textContent=m.ip;d.querySelector(".r").textContent=m.role;d.querySelector(".p").appendChild(document.createTextNode(m.pick));
+  const j=d.querySelector(".jobs");if(!m.jobs.length)j.remove();for(const x of m.jobs){const s=document.createElement("span");s.textContent=x;j.appendChild(s)}mw.appendChild(d)}
+build();setPlay();startStory(0);
+if(reduce){while(mode!=="end")tick(5)}
+requestAnimationFrame(frame);
+})();
+</script>
+</body></html>

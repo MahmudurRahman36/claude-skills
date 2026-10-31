@@ -2246,7 +2246,8 @@ SRC_CHUNK, SRC_OVERLAP = 4 << 20, 8192
 
 
 def secret_allowed(name: str, allow) -> bool:
-    """Same case rule as the name scan: path patterns match case-insensitively."""
+    """Matched with re.I like the name scan, but entries from the project config arrive case-exact and anchored at the
+    true end ((?-i:^...\\Z), orch_config.source_allow_engine); only v1-config patterns still ignore case."""
     return any(re.search(a, name, re.I) for a in allow)
 
 

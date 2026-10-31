@@ -89,6 +89,7 @@ Commands, URLs and job `prep`, `cmd` and `env` never hold secrets: orch saves, p
 | `memory`, `cpus`, `pids`, `timeout`, `prep_timeout` | caps: memory from 16m to `policy.limits.memory_max`, timeouts in whole seconds up to `policy.limits.timeout_max`, `cpus` above 0 and at most 64 (default 2), `pids` from 16 (default 2048), `prep_timeout` default 900 s |
 | `fail_patterns` | regular expressions that mark failure lines in the log |
 | `result_paths` | absolute paths copied back after a container run (default `/out`) |
+| `source_allow` | files the outgoing secret scan skips (a test fixture holding a fake key): one exact path per entry as an anchored regex, e.g. `^src/Scripts/Migrate-Database[.]ps1$`; letters, digits and `/ _ -` as they are, another punctuation mark as `[.]`, `[-]`, `[ ]` or `\.`; wildcards, repeats, groups and alternatives are refused; matched case-exact; adding one needs approval |
 | `dockerfile`, `context` | build jobs: the Dockerfile and its build context folder, relative to the repo |
 | `detected`, `manifest`, `files` | what detection saw, the sha256 over the files it read, and those files; a job without `manifest` is the user's own and is never compared with detection |
 

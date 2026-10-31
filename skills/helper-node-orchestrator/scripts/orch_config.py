@@ -113,7 +113,11 @@ JOB_CFG_KEYS = {"stage", "kind", "image", "dir", "repo", "prep", "cmd", "cache",
                 "timeout", "prep_timeout", "fail_patterns", "result_paths", "dockerfile", "context", "detected",
                 "manifest", "files", "source_allow"}
 NAME_RX = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
-SOURCE_ALLOW_RX = re.compile(r"\^(?:[A-Za-z0-9_/-]|\[\.\]|\\\.)+\$")  # one exact path: no wildcards or alternatives
+# source_allow: one exact path per entry. Tokens: a plain character, a one-character class of a listed punctuation
+# mark ([.] [-] [ ]) or an escaped punctuation mark (\. \-); no wildcards, repeats, groups or alternatives.
+ALLOW_PLAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_/-")
+ALLOW_CLASS = frozenset("!#$%&'()*+,-.:;=?@{|}~ ")
+ALLOW_ESC = frozenset(r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""")
 JOB_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 STATE_RX = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _USER_RX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
@@ -402,6 +406,34 @@ def health_url(e) -> str:
     return e.get("url", "") if isinstance(e, dict) else str(e)
 
 
+def source_allow_path(p):
+    """The one literal path an anchored source_allow entry names, or None when it is not one exact path."""
+    if not (isinstance(p, str) and len(p) > 2 and p[0] == "^" and p[-1] == "$"):
+        return None
+    body, out, i = p[1:-1], [], 0
+    while i < len(body):
+        c = body[i]
+        if c in ALLOW_PLAIN:
+            out.append(c)
+            i += 1
+        elif c == "[" and i + 2 < len(body) and body[i + 2] == "]" and body[i + 1] in ALLOW_CLASS:
+            out.append(body[i + 1])
+            i += 3
+        elif c == "\\" and i + 1 < len(body) and body[i + 1] in ALLOW_ESC:
+            out.append(body[i + 1])
+            i += 2
+        else:
+            return None
+    lit = "".join(out)
+    return lit if re.fullmatch(p, lit) else None
+
+
+def source_allow_engine(p) -> str:
+    """An entry in the engine's form: case-exact and anchored at the very end (the engine matches with re.I, and $
+    also matches before a trailing newline)."""
+    return "(?-i:" + p[:-1] + r"\Z)"
+
+
 def health_label(e) -> str:
     return (health_url(e) + (f" (via {e['resolve']})" if isinstance(e, dict) and e.get("resolve") else "")
             + (" (insecure)" if isinstance(e, dict) and e.get("insecure") else ""))
@@ -528,9 +560,10 @@ def _check_config(cfg) -> list:
             continue
         errs += [f"job {n}: unknown key {k!r}" for k in j if k not in JOB_CFG_KEYS]
         sa = j.get("source_allow", [])
-        if not isinstance(sa, list) or not all(isinstance(p, str) and SOURCE_ALLOW_RX.fullmatch(p) for p in sa):
+        if not isinstance(sa, list) or not all(source_allow_path(p) for p in sa):
             errs.append(f"job {n}: source_allow must be a list of anchored path regexes naming one exact file each "
-                        f"(letters, digits, / _ - and [.] or \\. for a dot), e.g. ^src/tests/x[.]py$")
+                        f"(letters, digits, / _ - as they are; another punctuation mark as [.] [-] [ ] or \\.), "
+                        f"e.g. ^src/tests/x[.]py$")
         if j.get("kind", "container") not in ("container", "build"):
             errs.append(f"job {n}: kind must be container or build")
         if "stage" in j and j["stage"] not in STAGES:
@@ -1416,7 +1449,7 @@ def _translate(name, j) -> dict:
     if j.get("detected"):
         t["note"] = j["detected"]
     if j.get("source_allow"):
-        t["source_allow"] = list(j["source_allow"])  # exact paths exempt from the outgoing secret scan
+        t["source_allow"] = [source_allow_engine(x) for x in j["source_allow"]]  # exact paths the secret scan skips
     return t
 
 

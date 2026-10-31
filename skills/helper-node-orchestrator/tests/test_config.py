@@ -254,7 +254,7 @@ class TestHashLoosening(unittest.TestCase):
 
     def test_source_allow_reaches_the_engine_job(self):
         j = {"image": "python:3.12-slim" + PIN, "cmd": "true", "source_allow": ["^src/a[.]py$"]}
-        self.assertEqual(oc._translate("x", j)["source_allow"], ["^src/a[.]py$"])
+        self.assertEqual(oc._translate("x", j)["source_allow"], [r"(?-i:^src/a[.]py\Z)"])  # case-exact, true end
         self.assertNotIn("source_allow", oc._translate("x", {**j, "source_allow": []}))
 
     def test_tightening_is_not_loosening(self):
@@ -423,6 +423,8 @@ class TestConfigIO(unittest.TestCase):
                  ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^src/(a$"]}}}, "one exact file"),
                  ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^.*$"]}}}, "one exact file"),
                  ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^a$|^.*$"]}}}, "one exact file"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^src/[ab][.]py$"]}}}, "one exact file"),
+                 ({"schema": 1, "jobs": {"x": {"cmd": "true", "source_allow": ["^src/a\\w$"]}}}, "one exact file"),
                  ({"schema": 1, "deploy": {"command": "a\nb"}}, "deploy.command"),
                  ({"schema": 1, "deploy": {"health": ["ftp://x"]}}, "deploy.health"),
                  ({"schema": 1, "deploy": {"health": [{"url": "https://x.example/h", "insecure": "yes"}]}},

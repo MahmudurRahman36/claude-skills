@@ -60,6 +60,32 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(oc.loosening(old, new), ["h11 (deploy@192.0.2.11): runs up to 2 heavy jobs at once (was 1)"])
         self.assertEqual(oc.loosening(new, old), [])
 
+    def test_source_allow_accepts_one_character_classes(self):
+        # real project pattern: [-] is a literal hyphen, still one exact file
+        for pat in ("^src/Scripts/Migrate[-]Database[.]ps1$", r"^src/a\-b[+]c[ ]d[.]txt$", r"^src/a\.py$"):
+            self.assertEqual(errs({"jobs": {"x": {"cmd": "true", "source_allow": [pat]}}}), [], pat)
+        for pat in ("^src/[ab][.]py$", r"^src/a\w$", "^src/[^a]$", "^src/a[]]$", "^src/[[]$", "^src/a?$",
+                    "^src/a{2}$", "^src/(a)$", "^src/a.py$", "^src/[\n]$", "^$", "^src/a$|^b$"):
+            self.assertIsNone(oc.source_allow_path(pat), pat)
+
+    def test_source_allow_names_exactly_one_path(self):
+        # every accepted entry, in the engine's form, exempts its own literal path and nothing else
+        import random
+        import re
+        rnd = random.Random(7)
+        toks = [*"abcXY09_/-", "[.]", "[-]", "[ ]", "[+]", "[(]", r"\.", r"\-", r"\[", r"\\", r"\$"]
+        for _ in range(500):
+            pat = "^src/" + "".join(rnd.choice(toks) for _ in range(rnd.randint(1, 8))) + "$"
+            lit = oc.source_allow_path(pat)
+            self.assertIsNotNone(lit, pat)
+            eng = oc.source_allow_engine(pat)
+            self.assertTrue(re.search(eng, lit, re.I), pat)
+            self.assertTrue(orch.secret_allowed(lit, [eng]), pat)  # the engine's own matcher
+            self.assertFalse(orch.secret_allowed(lit + "\n", [eng]), pat)
+            for other in (lit + "\n", lit + "x", "x" + lit, lit[:-1], lit.swapcase() if lit.swapcase() != lit else None):
+                if other is not None:
+                    self.assertIsNone(re.search(eng, other, re.I), (pat, other))
+
     def test_new_job_with_source_allow_is_loosening(self):
         old, new = full_cfg(), full_cfg()
         new["jobs"]["fresh"] = {**new["jobs"]["api-test"], "source_allow": ["^src/a[.]py$"]}

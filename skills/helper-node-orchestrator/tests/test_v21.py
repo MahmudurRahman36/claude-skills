@@ -253,5 +253,37 @@ class TestInit(Base):
         self.assertEqual(js["problems"], [])
 
 
+class ZombieAndReconcile(unittest.TestCase):  # v2.1.2: found by the selftest on a real Linux helper
+    @unittest.skipUnless(Path("/proc/self/stat").exists(), "needs Linux /proc")
+    def test_zombie_is_dead(self):
+        import subprocess
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        st = Path(f"/proc/{p.pid}/stat")
+        for _ in range(200):  # exited but not reaped: state Z
+            if st.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                break
+            threading.Event().wait(0.05)
+        try:
+            self.assertFalse(orch.pid_alive(p.pid), "an exited, unreaped orch must not keep its objects")
+        finally:
+            p.wait()
+
+    def test_live_process_is_alive(self):
+        self.assertTrue(orch.pid_alive(os.getpid()))
+
+    def test_reconcile_removed_reads_the_removed_line_only(self):
+        name = "agentt-1102163319e154-job"
+        kept = f"local: removed 0: -\norch[16:33:40] local: keep container {name} (live job)\n"
+        self.assertFalse(orch.reconcile_removed(kept, "local", name))
+        self.assertTrue(orch.reconcile_removed(f"local: removed 1: container {name}\n", "local", name))
+        self.assertFalse(orch.reconcile_removed(f"h11: removed 1: container {name}\n", "local", name))
+        self.assertFalse(orch.reconcile_removed(f"local: removed 1: container {name}2\n", "local", name))
+        self.assertTrue(orch.reconcile_removed(f"local: removed 2: container x, container {name}\n", "local", name))
+
+    def test_other_users_process_is_alive(self):  # EPERM: it exists
+        with mock.patch.object(orch.os, "kill", side_effect=PermissionError):
+            self.assertTrue(orch.IS_WIN or orch.pid_alive(4242))
+
+
 if __name__ == "__main__":
     unittest.main()

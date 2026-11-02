@@ -313,6 +313,9 @@ class SelftestProduction(unittest.TestCase):
             def kill(self):
                 pass
 
+            def wait(self, timeout=None):
+                return self.returncode
+
             def communicate(self, timeout=None):
                 return b"", None
         nn, out = self.nodes(), Path(orch.HOME) / "st" / "selftest.md"

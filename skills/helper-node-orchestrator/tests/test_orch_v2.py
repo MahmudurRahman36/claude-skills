@@ -483,6 +483,20 @@ class Selftest(unittest.TestCase):
     def test_project_jobs(self):
         self.assertEqual(orch.project_jobs(), ["app-test", "app-image"])
 
+    def test_unit_checks_leave_no_temp_dir_when_a_check_raises(self):  # v2.1.2: one orch-st-* dir leaked per run
+        import gc
+        tmp = Path(tempfile.mkdtemp(prefix="orchv2-tmp-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        with mock.patch.object(tempfile, "tempdir", str(tmp)), mock.patch.object(orch, "scan_results",
+                                                                                 side_effect=RuntimeError("boom")), \
+                redirect_stdout(io.StringIO()), mock.patch.object(orch, "say"):
+            try:
+                orch.cmd_selftest(SimpleNamespace(unit_only=True, quick=False, node=None, out=None))
+            except RuntimeError:
+                pass
+        gc.collect()
+        self.assertEqual([p.name for p in tmp.iterdir()], [])
+
     def test_unit_only_passes_on_synthetic_config(self):
         out = orch.HOME / "st-unit.md"
         o = io.StringIO()
@@ -500,7 +514,8 @@ class Wrapper(unittest.TestCase):
 
     def test_no_hardcoded_interpreter(self):
         s = self.W.read_text(encoding="utf-8")
-        self.assertIn('for py in "${ORCH_PYTHON:-}" python3 python py; do', s)
+        self.assertIn('for py in "${ORCH_PYTHON:-}" python3 python3.14 python3.13 python3.12 python3.11 python3.10 '
+                      'python py; do', s)
         self.assertNotRegex(s, r"(?i)/c/|[a-z]:[/\\]|\.exe")
         self.assertIn("sys.version_info >= (3, 10)", s)
 
@@ -511,6 +526,23 @@ class Wrapper(unittest.TestCase):
         p = subprocess.run([shutil.which("bash"), self.W.as_posix(), "status", "--local"], env=env, capture_output=True,
                            text=True, timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("live jobs:", p.stdout)
+
+    @unittest.skipUnless(shutil.which("bash"), "needs bash")
+    def test_versioned_python_after_old_python3(self):  # EL9: python3 is 3.9, python3.12 sits beside it
+        with tempfile.TemporaryDirectory() as d:
+            old, new = Path(d) / "python3", Path(d) / "python3.14"
+            old.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8", newline="\n")
+            new.write_text(f'#!/usr/bin/env bash\necho picked-3.14 >&2\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+                           encoding="utf-8", newline="\n")
+            for f in (old, new):
+                f.chmod(0o755)
+            env = dict(os.environ, PATH=os.pathsep.join([d, os.environ.get("PATH", "")]))
+            env.pop("ORCH_PYTHON", None)
+            p = subprocess.run([shutil.which("bash"), self.W.as_posix(), "status", "--local"], env=env,
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("picked-3.14", p.stderr)
         self.assertIn("live jobs:", p.stdout)
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash")

@@ -1093,9 +1093,14 @@ def pid_alive(pid: int) -> bool:
         return bool(ok) and code.value == 259  # STILL_ACTIVE
     try:
         os.kill(pid, 0)
+    except PermissionError:  # exists, owned by another user
         return True
     except OSError:
         return False
+    try:  # a zombie (exited, not yet reaped) still answers kill 0: it is dead
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
 
 
 def proc_start(pid: int) -> int:
@@ -3566,6 +3571,12 @@ def reconcile_node(node: Node, la: dict | None = None, quiet=False, force_all=Fa
     return done
 
 
+def reconcile_removed(out: str, node: str, name: str) -> bool:
+    """True when `orch reconcile` output lists `name` on the node's "removed" line (not on a "keep" line)."""
+    hit = re.compile(rf"(?:^|[\s,]){re.escape(name)}(?:,|\s|$)")
+    return any(l.startswith(f"{node}: removed ") and hit.search(l.split(": ", 2)[-1]) for l in out.splitlines())
+
+
 def cmd_reconcile(a) -> int:
     nodes = nodes_all()
     if a.node:
@@ -4525,7 +4536,8 @@ def cmd_selftest(a) -> int:
             md.extend(["```", out.strip()[-3500:], "```", ""])
 
     # --- unit checks (no node access)
-    d = Path(tempfile.mkdtemp(prefix="orch-st-"))
+    td = tempfile.TemporaryDirectory(prefix="orch-st-", ignore_cleanup_errors=True)  # removed even when a check raises
+    d = Path(td.name)
     tp = d / "evil.tar"
     with tarfile.open(tp, "w") as t:
         for nm, data in (("out/good.txt", b"ok"), ("out/../../evil.txt", b"x"), ("/abs.txt", b"x")):
@@ -4645,7 +4657,7 @@ def cmd_selftest(a) -> int:
         except OrchError as e:
             outs.append(f"{kw}: refused ({e.msg})")
     rec("tar bomb caps (members / per-file / total)", all("refused (" in o for o in outs), "; ".join(outs))
-    shutil.rmtree(d, ignore_errors=True)
+    td.cleanup()
 
     # --- live checks
     if getattr(a, "unit_only", False):
@@ -4707,11 +4719,15 @@ def cmd_selftest(a) -> int:
             time.sleep(1)
         time.sleep(3)
         pr.kill()  # hard kill: no atexit, no signal handler
+        try:
+            pr.wait(timeout=30)  # reap it: an unreaped child stays a zombie
+        except subprocess.TimeoutExpired:
+            pass  # still there: the check below fails on its own
         rc1, out1, _ = _self(["reconcile", "--node", tn])
         time.sleep(17)
         rc2, out2, _ = _self(["reconcile", "--node", tn])
         rec(f"{tn}: killed orch mid-job -> reconcile keeps it during the lease, removes it after",
-            bool(jid) and "keep container" in out1 and f"{PREFIX}{jid}-job" in out2.split("removed")[-1],
+            bool(jid) and "keep container" in out1 and reconcile_removed(out2, tn, f"{PREFIX}{jid}-job"),
             f"job {jid}", out1 + "\n---\n" + out2)
         # concurrency: two heavy jobs on one node (capacity 1; a node with max_heavy 2 skips this check)
         cap = node_max_heavy(tn, cfg_nodes()["admission"])

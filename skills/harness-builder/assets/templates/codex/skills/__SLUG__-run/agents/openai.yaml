@@ -1,0 +1,5 @@
+interface:
+  display_name: "{{SLUG}} run"
+  short_description: "Process new items, verify them, write the report"
+policy:
+  allow_implicit_invocation: true

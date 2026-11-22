@@ -1,0 +1,5 @@
+interface:
+  display_name: "{{SLUG}} calibrate"
+  short_description: "Human-only: turn feedback into an approved general rule"
+policy:
+  allow_implicit_invocation: false

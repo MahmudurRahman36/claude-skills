@@ -1,0 +1,5 @@
+interface:
+  display_name: "{{SLUG}} verify"
+  short_description: "Read-only independent check of scorecards"
+policy:
+  allow_implicit_invocation: false

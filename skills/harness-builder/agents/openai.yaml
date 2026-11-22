@@ -1,0 +1,6 @@
+interface:
+  display_name: "Harness Builder"
+  short_description: "Understand a project, then build a verified six-layer AI harness for one workflow"
+  default_prompt: "Use $harness-builder to understand this project and build a harness for its repeated workflow."
+policy:
+  allow_implicit_invocation: true
